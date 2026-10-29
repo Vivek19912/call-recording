@@ -28,10 +28,12 @@ import com.baba.callvault.server.IRecorderService
 import com.baba.callvault.server.RecorderConnection
 import com.baba.callvault.server.RecorderServiceImpl
 import com.baba.callvault.system.storage.SafHelper
+import com.baba.callvault.data.recordings.CallTypeResolver
 import com.baba.callvault.data.recordings.RecordingCatalog
 import com.baba.callvault.data.waveform.RecordingExtrasRepository
 import com.baba.callvault.transcription.TranscriptionScheduler
 import com.baba.callvault.system.storage.StorageRouter
+import com.baba.callvault.system.storage.WacrmUploads
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -45,6 +47,7 @@ import com.baba.callvault.system.interop.MetadataSidecar
 import com.baba.callvault.data.recordings.RecordingsRepository
 import com.baba.callvault.data.transcripts.FlagRepository
 import com.baba.callvault.data.voip.VoipAppPolicy
+import com.baba.callvault.data.voip.WhatsappRecordingSource
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -67,6 +70,13 @@ object VoipRecordingCoordinator {
 
     /** Kept so the notification can be re-posted with a new count or paused state. */
     private var currentAppLabel: String? = null
+
+    /**
+     * The framework-resolved package of the call in flight (e.g. `com.whatsapp`), kept for the
+     * WACRM call-type classification at publish. Set from the same authoritative lookup as
+     * [currentAppLabel]; cleared with it. Null when the owner could not be told.
+     */
+    private var currentAppPackage: String? = null
 
     /** Whether the user has paused this recording from the notification. */
     private var paused = false
@@ -139,6 +149,19 @@ object VoipRecordingCoordinator {
                 .onFailure { AppLogger.d(TAG, "caller lookup failed: ${it.message}") }
                 .getOrNull()
         }
+        // The mutually exclusive WhatsApp source, checked before anything is created OR
+        // reported (same position the per-app choice below holds): exactly one WhatsApp app may
+        // record. Non-WhatsApp packages defer to the generic exclusion set underneath.
+        val sourceDecision = WhatsappRecordingSource.allowsPackage(
+            prefs.getWhatsappRecordingSource(), callPackage
+        )
+        if (sourceDecision == false) {
+            // Not reportMissed(): this is not a miss. The user asked for the other app (or
+            // neither), and telling them off for getting what they configured is how a warning
+            // becomes noise.
+            AppLogger.i(TAG, "Not recording this call: $callPackage is not the selected WhatsApp recording source.")
+            return
+        }
         // The user's per-app choice, checked before anything is created OR reported. Not later:
         // creating the file first and deleting it would put a recording of an excluded app on disk,
         // however briefly, leaving a window where a sync tool could take a copy of it — and reporting
@@ -193,6 +216,7 @@ object VoipRecordingCoordinator {
         clock.start()
         PendingFlags.beginCall()
         currentAppLabel = appLabel
+        currentAppPackage = callPackage
         paused = false
         isSuspendedForCarrierCall = false
         VoipRecordingNotification.show(context, appLabel)
@@ -552,12 +576,16 @@ object VoipRecordingCoordinator {
         heldForAnswer = false
         val caller = lateCaller
         lateCaller = null
+        // Capture before the clear below: the publish block runs after, and the package is the
+        // only authoritative app identity for the WACRM call-type classification.
+        val appPackage = currentAppPackage
         // Straight away, not after the file work below: the controls describe a recording that has
         // already stopped, and a Stop button that lingers invites a second press at a moment when
         // the next call may already be starting.
         VoipRecordingNotification.dismiss(context)
         clock.reset()
         currentAppLabel = null
+        currentAppPackage = null
         paused = false
         isSuspendedForCarrierCall = false
         runCatching { RecorderConnection.service?.stopRecording() }
@@ -662,7 +690,12 @@ object VoipRecordingCoordinator {
                             return@runCatching
                         }
                     }
-                    RecordingCatalog.recordLocal(context, name, safUri, size, System.currentTimeMillis())
+                    RecordingCatalog.recordLocal(
+                        context, name, safUri, size, System.currentTimeMillis(),
+                        // App calls classify by the framework-resolved package — WhatsApp vs WhatsApp
+                        // Business vs unknown. Null stays null: unrecognized apps are never guessed.
+                        wacrmCallType = CallTypeResolver.fromPackage(appPackage)
+                    )
                     // Marks collected during the call, keyed to the final name — the same rule the
                     // carrier path follows and for the same reason.
                     FlagRepository.save(context, name, PendingFlags.drain())
@@ -730,6 +763,14 @@ object VoipRecordingCoordinator {
                     }
                     AppLogger.i(TAG, "VoIP recording catalogued: $name ($size bytes)")
                     StorageRouter.route(context, safUri, name, codecMime)
+                    // Phase 1 WACRM upload: same post-finalization point as the carrier path —
+                    // enqueue-only; the worker owns the network and the retry budget. No phone or
+                    // direction on this path (an app call has neither reliably); the call type rides
+                    // along for server-side counting.
+                    WacrmUploads.enqueueAfterFinalize(
+                        context, safUri, name, codecMime, size, System.currentTimeMillis(),
+                        callType = CallTypeResolver.fromPackage(appPackage)
+                    )
                 }.onFailure { AppLogger.e(TAG, "Cataloguing the VoIP recording failed: ${it.message}", it) }
             }
         }

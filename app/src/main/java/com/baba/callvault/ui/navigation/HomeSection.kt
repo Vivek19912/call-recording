@@ -87,7 +87,8 @@ enum class HomeSection(val key: String) {
                 NotificationDestination.Status,
                 NotificationDestination.Update,
                 NotificationDestination.Pairing,
-                NotificationDestination.Debug -> Hub
+                NotificationDestination.Debug,
+                NotificationDestination.Dial -> Hub
                 NotificationDestination.Transcript,
                 NotificationDestination.TranscriptFailed -> Transcripts
             }

@@ -30,12 +30,14 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * every recording, so a drop turns the first launch after an update into the slowest one — the exact
  * complaint [MIGRATION_1_2] exists to end.
  */
-@Database(entities = [RecordingEntry::class, MergePartEntry::class], version = 3, exportSchema = false)
+@Database(entities = [RecordingEntry::class, MergePartEntry::class, CallEventEntry::class], version = 6, exportSchema = false)
 abstract class RecordingDatabase : RoomDatabase() {
 
     abstract fun recordingDao(): RecordingDao
 
     abstract fun mergePartDao(): MergePartDao
+
+    abstract fun callEventDao(): CallEventDao
 
     companion object {
 
@@ -79,6 +81,55 @@ abstract class RecordingDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Adds the WACRM upload state. Additive and nullable, exactly like [MIGRATION_1_2]: every
+         * existing row keeps everything it has and simply starts with no upload state — which reads
+         * as "never attempted", the correct state for a recording made before uploads existed.
+         */
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE recordings ADD COLUMN wacrmUploadState INTEGER")
+            }
+        }
+
+        /**
+         * Adds the WACRM call type. Additive and nullable, exactly like [MIGRATION_3_4]: every
+         * existing row keeps everything it has and starts unclassified (null) — which is correct,
+         * because classification did not exist when those recordings were made, and old rows are
+         * never backfilled or guessed.
+         */
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE recordings ADD COLUMN wacrmCallType TEXT")
+            }
+        }
+
+        /**
+         * Adds the call-event outbox. A missed/rejected carrier call
+         * has no recording, so without a persisted row an offline gap
+         * would lose the event forever. A fresh table (not an ALTER):
+         * nothing existed before, so there is nothing to preserve —
+         * but a hand-written migration (not the destructive fallback)
+         * keeps the recordings catalog and merge manifests intact.
+         */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `call_events` (" +
+                        "`clientEventId` TEXT NOT NULL, " +
+                        "`direction` TEXT NOT NULL, " +
+                        "`outcome` TEXT NOT NULL, " +
+                        "`phoneNumber` TEXT, " +
+                        "`durationSeconds` INTEGER, " +
+                        "`occurredAtMillis` INTEGER NOT NULL, " +
+                        "`uploadState` INTEGER, " +
+                        "`createdAtMillis` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`clientEventId`))"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_call_events_uploadState` ON `call_events` (`uploadState`)")
+            }
+        }
+
         @Volatile
         private var INSTANCE: RecordingDatabase? = null
 
@@ -88,7 +139,7 @@ abstract class RecordingDatabase : RoomDatabase() {
                     context.applicationContext,
                     RecordingDatabase::class.java,
                     "recordings.db"
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build().also { INSTANCE = it }
             }

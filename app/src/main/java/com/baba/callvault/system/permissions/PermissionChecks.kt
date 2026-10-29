@@ -56,6 +56,27 @@ object PermissionChecks {
     }
 
     /**
+     * Returns true if [Manifest.permission.READ_PHONE_NUMBERS] is granted.
+     *
+     * This permission is required on recent Android to read the
+     * device's own line number(s) via
+     * [android.telephony.SubscriptionInfo.getNumber] /
+     * [android.telephony.SubscriptionManager.getPhoneNumber].
+     * `READ_PHONE_STATE` alone is not sufficient for those calls.
+     * Diagnostic only for now: nothing in the recording path
+     * changes behavior based on it yet.
+     *
+     * @param context The app context.
+     * @return true if the phone-numbers permission is currently granted.
+     */
+    fun hasPhoneNumbersPermission(context: Context): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.READ_PHONE_NUMBERS
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
      * Returns true if [Manifest.permission.READ_CALL_LOG] is granted.
      *
      * Required to read call logs and receive deprecated phone number in phone state broadcast intents.

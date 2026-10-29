@@ -38,6 +38,16 @@ import androidx.room.PrimaryKey
  *                        has never been read. Cached because reading it costs a SAF file-descriptor
  *                        open plus a MediaExtractor per recording, and Home used to pay that for
  *                        EVERY recording the call log could not answer for, on EVERY list load.
+ * @param wacrmUploadState WACRM upload state ([WacrmUploadState]), or null when no upload has ever
+ *                        been attempted. Nullable so every pre-existing row simply starts unattempted.
+ *                        Persisted (not derived) because the crash window between "server said 201"
+ *                        and "row stamped" is otherwise indistinguishable from "never tried", and that
+ *                        ambiguity is what causes a duplicate upload on retry.
+ * @param wacrmCallType The call's kind as a [CallType] wire value ("phone", "whatsapp",
+ *                        "whatsapp_business"), or null when unknown — which is every recording made
+ *                        before classification existed, and any app [CallTypeResolver] cannot tell.
+ *                        Stored as the wire string (not the enum) so Room needs no converter and old
+ *                        rows read as null. Never backfilled or guessed.
  */
 @Entity(tableName = "recordings")
 data class RecordingEntry(
@@ -47,5 +57,22 @@ data class RecordingEntry(
     val localSizeBytes: Long? = null,
     val driveSizeBytes: Long? = null,
     val lastModified: Long = 0L,
-    val durationSeconds: Long? = null
+    val durationSeconds: Long? = null,
+    val wacrmUploadState: Int? = null,
+    val wacrmCallType: String? = null
 )
+
+/**
+ * Persistent WACRM upload states for [RecordingEntry.wacrmUploadState].
+ *
+ * Kept as bare ints (not an enum) so Room stores them without a converter and old rows read as
+ * null. There is deliberately no UPLOADING: a persisted "uploading" is meaningless after a process
+ * death (the attempt is gone, only its outcome matters), and rows are only ever stamped with an
+ * outcome. Null and PENDING both mean "not yet uploaded" — PENDING additionally means an attempt
+ * has been queued at least once.
+ */
+object WacrmUploadState {
+    const val PENDING = 0
+    const val UPLOADED = 1
+    const val FAILED = 2
+}

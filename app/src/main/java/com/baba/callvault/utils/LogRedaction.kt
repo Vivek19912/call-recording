@@ -35,6 +35,24 @@ object LogRedaction {
     private const val PHONE_PLACEHOLDER = "[PHONE_REDACTED]"
 
     /**
+     * What a WACRM API key becomes. The uploader never logs the key in the first place — this is
+     * the seatbelt for the line nobody expected: an exception message, a URL dump, a pasted
+     * header. Matched first, before any other rule can chew on the key's digit runs.
+     */
+    const val WACRM_KEY_PLACEHOLDER = "[WACRM_KEY_REDACTED]"
+    private val WACRM_KEY_REGEX = Regex("wacrm_live_[A-Za-z0-9_\\-]+")
+
+    /**
+     * What a bearer/session token becomes. Supabase access and refresh tokens are JWT-shaped
+     * (three base64url segments); the shape is distinctive enough that matching it cannot eat
+     * a recording filename, a phone number, or a contact token. Applied with the key rule,
+     * before any other rule. Idempotent: the placeholder contains no dots, so a second pass
+     * cannot match it again.
+     */
+    const val TOKEN_PLACEHOLDER = "[TOKEN_REDACTED]"
+    private val TOKEN_REGEX = Regex("eyJ[A-Za-z0-9_\\-]{8,}\\.[A-Za-z0-9_\\-]{8,}\\.[A-Za-z0-9_\\-]{8,}")
+
+    /**
      * How many hex digits of the salted digest a contact token carries.
      *
      * Four (16 bits) is a deliberate readability/collision trade. Two distinct contacts collide with
@@ -148,16 +166,23 @@ object LogRedaction {
      * @param salt this install's random salt, from `AppPreferences.getLogPseudonymSalt`.
      */
     fun redact(message: String, salt: String): String {
-        if (!mayContainRecordingName(message)) return PHONE_REGEX.replace(message, PHONE_PLACEHOLDER)
+        // Secrets first: a WACRM key or session token must not survive even inside a line that
+        // is otherwise kept verbatim, and their digit runs must never reach the phone rule as
+        // "numbers".
+        val withoutSecrets = TOKEN_REGEX.replace(
+            WACRM_KEY_REGEX.replace(message, WACRM_KEY_PLACEHOLDER),
+            TOKEN_PLACEHOLDER
+        )
+        if (!mayContainRecordingName(withoutSecrets)) return PHONE_REGEX.replace(withoutSecrets, PHONE_PLACEHOLDER)
 
-        val out = StringBuilder(message.length + 16)
+        val out = StringBuilder(withoutSecrets.length + 16)
         var cursor = 0
-        for (match in RECORDING_NAME_REGEX.findAll(message)) {
-            out.append(PHONE_REGEX.replace(message.substring(cursor, match.range.first), PHONE_PLACEHOLDER))
+        for (match in RECORDING_NAME_REGEX.findAll(withoutSecrets)) {
+            out.append(PHONE_REGEX.replace(withoutSecrets.substring(cursor, match.range.first), PHONE_PLACEHOLDER))
             out.append(safeRecordingName(match, salt))
             cursor = match.range.last + 1
         }
-        out.append(PHONE_REGEX.replace(message.substring(cursor), PHONE_PLACEHOLDER))
+        out.append(PHONE_REGEX.replace(withoutSecrets.substring(cursor), PHONE_PLACEHOLDER))
         return out.toString()
     }
 

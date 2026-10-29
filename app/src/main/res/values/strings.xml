@@ -85,6 +85,9 @@
     <string name="permission_phone_state_label">Phone State</string>
     <string name="permission_phone_state_description">Required to detect when a call starts or ends.</string>
 
+    <string name="permission_phone_numbers_label">Phone Numbers</string>
+    <string name="permission_phone_numbers_description">Required on newer Android versions to read this phone\'s own line numbers.</string>
+
     <string name="permission_call_log_label">Call Log</string>
     <string name="permission_call_log_description">Required so we receive the unredacted phone number on phone state events.</string>
 
@@ -173,6 +176,41 @@
     <string name="settings_subsection_outgoing">Outgoing calls</string>
     <string name="settings_subsection_resilience">Resilience</string>
     <string name="settings_subsection_voip">VoIP calls</string>
+    <string name="settings_subsection_whatsapp">WhatsApp</string>
+    <string name="settings_subsection_whatsapp_business">WhatsApp Business</string>
+    <string name="settings_subsection_whatsapp_recording">WhatsApp Recording</string>
+    <string name="settings_whatsapp_source_label">Which WhatsApp app should be recorded?</string>
+    <string name="settings_whatsapp_source_none">None</string>
+    <string name="settings_whatsapp_source_none_description">Don\'t record WhatsApp calls</string>
+    <string name="settings_whatsapp_source_whatsapp">WhatsApp</string>
+    <string name="settings_whatsapp_source_whatsapp_description">Record calls made through WhatsApp</string>
+    <string name="settings_whatsapp_source_business">WhatsApp Business</string>
+    <string name="settings_whatsapp_source_business_description">Record calls made through WhatsApp Business</string>
+    <string name="settings_whatsapp_source_exclusive">Only one WhatsApp app can be recorded at a time.</string>
+    <string name="settings_whatsapp_migration_title">WhatsApp recording settings have changed</string>
+    <string name="settings_whatsapp_migration_message">Previously, both WhatsApp and WhatsApp Business were enabled. You can now choose only one.</string>
+    <string name="settings_phone_calls_label">Phone Calls</string>
+    <string name="settings_phone_number_not_configured">No phone number configured</string>
+    <string name="settings_configured_number_not_detected">Configured number not detected</string>
+    <string name="settings_whatsapp_calls_label">WhatsApp Calls</string>
+    <string name="settings_managed_by_whatsapp_max">Managed by WhatsApp Max</string>
+    <string name="settings_policy_enabled">Enabled</string>
+    <string name="settings_policy_disabled">Disabled</string>
+    <string name="settings_policy_unavailable">Temporarily unavailable</string>
+    <string name="settings_sim_number_unavailable">Number unavailable</string>
+    <string name="settings_sim_record_from">Record calls from</string>
+    <string name="settings_sim_all">All SIMs</string>
+    <string name="settings_sim_all_description">Record calls on every SIM, as before.</string>
+    <string name="settings_sim_slot">SIM %1$d</string>
+    <string name="settings_sim_none">No SIM subscriptions found on this device. Phone-call recording is unaffected — calls record on any SIM.</string>
+    <string name="settings_sim_second_unavailable">SIM 2 is not available on this device.</string>
+    <string name="settings_sim_stale">The SIM you picked is no longer in this phone, so calls are recording on every SIM again. Pick a SIM to narrow it down.</string>
+    <string name="settings_record_whatsapp">Record WhatsApp calls</string>
+    <string name="settings_record_whatsapp_business">Record WhatsApp Business calls</string>
+    <string name="settings_whatsapp_requires_voip">Also needs “Record VoIP calls” turned on.</string>
+    <string name="settings_whatsapp_number_label">WhatsApp number</string>
+    <string name="settings_whatsapp_business_number_label">WhatsApp Business number</string>
+    <string name="settings_whatsapp_number_unavailable">Number filtering isn\'t available: Android does not tell CallVault which WhatsApp number a call belongs to, so this cannot filter anything yet. The switch above is what controls recording.</string>
     <string name="settings_voip_recording_label">Record VoIP calls</string>
     <string name="settings_voip_recording_description">Also record calls made in apps like WhatsApp, Signal and Telegram. Experimental — some apps block recording, and this cannot be known until a call is under way.</string>
     <string name="settings_voip_auto_start_label">Start automatically</string>
@@ -824,6 +862,39 @@
     <string name="settings_transcript_sidecar_label">Save transcript and notes beside the recording</string>
     <string name="settings_transcript_sidecar_desc">Write a .md text file next to each recording</string>
     <string name="settings_transcript_sidecar_hint">Saves the transcript, notes and summary as a text file with the same name as the recording, so copying your folder to a PC keeps the text with the audio. Turning it on also saves the ones you already have.</string>
+    <string name="settings_wacrm_title">WACRM upload</string>
+    <string name="settings_wacrm_enable_label">Upload finished recordings to WACRM</string>
+    <string name="settings_wacrm_enable_desc">Finished call recordings are uploaded automatically after each call</string>
+    <string name="settings_wacrm_url_label">WACRM server URL</string>
+    <string name="settings_wacrm_url_hint">Must start with https:// — uploads never use plain HTTP</string>
+    <string name="settings_wacrm_key_label">WACRM API key</string>
+    <string name="settings_wacrm_key_hint">Starts with wacrm_live_. Stored encrypted on this phone and never shown again.</string>
+    <string name="settings_wacrm_key_saved">API key saved.</string>
+    <string name="settings_wacrm_key_cleared">API key removed.</string>
+    <string name="settings_wacrm_key_set">An API key is saved on this phone.</string>
+    <string name="settings_wacrm_key_not_set">No API key saved yet — uploads are paused until you add one.</string>
+    <string name="settings_wacrm_save">Save</string>
+    <string name="settings_wacrm_clear">Remove key</string>
+    <string name="settings_wacrm_connect_title">WhatsApp Max</string>
+    <string name="settings_wacrm_connect_desc">Connect your CallVault to your WhatsApp Max account to automatically upload finished call recordings.</string>
+    <string name="settings_wacrm_email_label">WhatsApp Max Email</string>
+    <string name="settings_wacrm_email_hint">The email you use to sign in to WhatsApp Max.</string>
+    <string name="settings_wacrm_password_label">WhatsApp Max Password</string>
+    <string name="settings_wacrm_connect">Connect WhatsApp Max</string>
+    <string name="settings_wacrm_disconnect">Disconnect WhatsApp Max</string>
+    <string name="settings_wacrm_connected">✓ Connected to WhatsApp Max</string>
+    <string name="settings_wacrm_connecting">Connecting…</string>
+    <string name="settings_wacrm_bad_credentials">Invalid email or password.</string>
+    <string name="settings_wacrm_no_permission">Your WhatsApp Max account does not have permission to upload recordings.</string>
+    <string name="settings_wacrm_unreachable">Unable to connect to WhatsApp Max.</string>
+    <string name="wacrm_reconnect_required">WhatsApp Max needs to be reconnected — uploads are paused until you sign in again.</string>
+    <!-- Click-to-dial auto-open (English only for now; translators: please localize). -->
+    <string name="settings_wacrm_auto_open_label" translatable="false">Open the dialer automatically</string>
+    <string name="settings_wacrm_auto_open_desc" translatable="false">When a desktop click-to-dial request arrives: if CallVault is open it opens the dialer at once, otherwise (with the display-over-apps permission below) it may open the dialer itself. Off means you always get a notification to tap instead. The dialer only ever opens prefilled — calls are never placed automatically.</string>
+    <string name="settings_wacrm_auto_open_grant" translatable="false">Allow display over other apps</string>
+    <string name="settings_wacrm_auto_open_granted" translatable="false">Display-over-apps granted — background requests can open the dialer.</string>
+    <string name="settings_wacrm_auto_open_missing" translatable="false">Not granted — background requests will arrive as notifications instead. Tap below, enable the permission, then come back and tap “Check again”.</string>
+    <string name="settings_wacrm_auto_open_recheck" translatable="false">Check again</string>
     <string name="settings_backup_title">Back up settings</string>
     <string name="settings_backup_desc">Save your settings to a file, or restore them from one.</string>
     <string name="settings_export">Export</string>

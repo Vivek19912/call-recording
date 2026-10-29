@@ -70,7 +70,16 @@ enum class NotificationDestination(val key: String, val requestCode: Int) {
      * PendingIntent, so whichever posted last would decide where both of them led. See the note on
      * [requestCode].
      */
-    TranscriptFailed("transcript_failed", 5006);
+    TranscriptFailed("transcript_failed", 5006),
+
+    /**
+     * A click-to-dial request from WhatsApp Max. The requested number
+     * rides on [com.baba.callvault.system.storage.OpenDialRequest]
+     * extras, not here: this enum stays a closed set of places.
+     * Tapping opens the native dialer via ACTION_DIAL (never
+     * ACTION_CALL) after the explicit tap gesture.
+     */
+    Dial("dial", 5007);
 
     companion object {
 

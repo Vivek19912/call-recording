@@ -29,14 +29,17 @@ import com.baba.callvault.data.health.record
 import com.baba.callvault.integrations.adb.AdbShell
 import com.baba.callvault.server.RecorderBackend
 import com.baba.callvault.R
+import com.baba.callvault.data.recordings.CallType
 import com.baba.callvault.data.recordings.RecordingCatalog
 import com.baba.callvault.data.waveform.RecordingExtrasRepository
 import com.baba.callvault.transcription.TranscriptionScheduler
 import com.baba.callvault.data.recordings.RecordingDirection
 import com.baba.callvault.data.transcripts.SpeakerTurnsRepository
 import com.baba.callvault.data.recordings.RecordingMetadata
+import com.baba.callvault.services.call.CarrierCallLog
 import com.baba.callvault.system.storage.SafHelper
 import com.baba.callvault.system.storage.StorageRouter
+import com.baba.callvault.system.storage.WacrmUploads
 import com.baba.callvault.utils.AppLogger
 import com.baba.callvault.utils.PhoneNumberManager
 import com.baba.callvault.utils.RecordingFileNameFormatter
@@ -584,14 +587,18 @@ class RecordingForegroundService : Service() {
 
                 // Route exactly once, after any rename has been applied.
                 routeFinalRecording(
-                    finalUri, mimeType, activeSession.lastCapturedByteCount, originalMetadata.direction
+                    finalUri, mimeType, activeSession.lastCapturedByteCount, originalMetadata.direction,
+                    // The CallLog number just resolved above (E.164 when parseable) — the same
+                    // source WACRM will match against. Blank stays blank: the worker omits it.
+                    phoneNumber = finalNumber.ifBlank { null }
                 )
             }
         } else if (uriToRename != null) {
             // Phone number was already known at recording start — no rename needed.
             // Route the file with its current name immediately (once).
             routeFinalRecording(
-                uriToRename, mimeType, activeSession.lastCapturedByteCount, originalMetadata?.direction
+                uriToRename, mimeType, activeSession.lastCapturedByteCount, originalMetadata?.direction,
+                phoneNumber = originalMetadata?.rawPhoneNumber?.ifBlank { null }
             )
         }
         // A capture AudioFlinger invalidated mid-call can leave the microphone indicator on with nothing recording;
@@ -607,6 +614,11 @@ class RecordingForegroundService : Service() {
 
     /**
      * Tries to query the call log for the most recent call matching the given direction, and returns the associated phone number.
+     *
+     * The retry mechanics live in [CarrierCallLog] (shared with the call-outcome reporter);
+     * the selection here is unchanged by design: missed/rejected rows are excluded, since for
+     * a rename they are useless, and in a dual-call scenario could pick the wrong number.
+     *
      * @return The phone number from the most recent call log entry matching the direction, or null if no valid entry is found after multiple attempts.
      */
     private suspend fun tryGetFinalNumberFromLog(
@@ -620,25 +632,7 @@ class RecordingForegroundService : Service() {
             else -> null
         }
         // Try multiples times with a delay in case the OS didn't write the call log entry yet (only written after the call ended).
-        for (i in 1..4) {
-            try {
-                val cursor = context.contentResolver.query(
-                    CallLog.Calls.CONTENT_URI,
-                    arrayOf(CallLog.Calls.NUMBER),
-                    typeSelection, null,
-                    "${CallLog.Calls.DATE} DESC"
-                )
-                cursor?.use {
-                    if (it.moveToFirst()) {
-                        return it.getString(0)
-                    }
-                }
-            } catch (e: Exception) {
-                AppLogger.w(TAG, "Failed to query call log for fallback number", e)
-            }
-            if (i < 4) delay(400)
-        }
-        return null
+        return CarrierCallLog.queryLatestWithRetry(context, typeSelection)?.number
     }
 
     /**
@@ -672,12 +666,15 @@ class RecordingForegroundService : Service() {
      *
      * @param uri      The URI of the finalized recording file.
      * @param mimeType The MIME type of the recording (e.g. "audio/opus" or "audio/mp4a-latm").
+     * @param phoneNumber The call's phone number (E.164 when parseable), or null when unknown.
+     *   Carried to the WACRM uploader only — never used for routing, renaming, or cataloguing.
      */
     private fun routeFinalRecording(
         uri: Uri,
         mimeType: String,
         knownByteCount: Long? = null,
-        direction: RecordingDirection? = null
+        direction: RecordingDirection? = null,
+        phoneNumber: String? = null
     ) {
         val doc = DocumentFile.fromSingleUri(applicationContext, uri) ?: return
         val name = doc.name ?: return
@@ -738,7 +735,9 @@ class RecordingForegroundService : Service() {
         // be torn down right after (the process is given a few seconds to live — same rationale as the
         // CallLog fallback above). Written for every storage target, regardless of where the file lands.
         CoroutineScope(Dispatchers.IO).launch {
-            RecordingCatalog.recordLocal(applicationContext, name, uri, sizeBytes, lastModified)
+            // Carrier calls are structurally PHONE — assigned, never detected. Stored on the row so
+            // the uploader (and any future reader) need not re-derive it.
+            RecordingCatalog.recordLocal(applicationContext, name, uri, sizeBytes, lastModified, wacrmCallType = CallType.PHONE)
             // The BCR-compatible details file, when the user asked for one. Driven off the FINAL
             // name, after any call-log rename: a sidecar written against the pre-rename name would
             // sit beside nothing and be invisible to every tool that looks for it.
@@ -765,6 +764,21 @@ class RecordingForegroundService : Service() {
         }
         recordHealth(sizeBytes, name)
         StorageRouter.route(applicationContext, uri, name, mimeType)
+        // Phase 1 WACRM upload: enqueue-only, after finalization. The file is closed, renamed and
+        // catalogued above, StorageRouter has had its turn, and nothing here touches the network —
+        // the worker does that on its own schedule. Upload failure never affects the local file.
+        // Carrier metadata (CallLog number + direction) rides along for server-side contact
+        // matching; WACRM normalizes and resolves it, CallVault never learns contacts.
+        WacrmUploads.enqueueAfterFinalize(
+            applicationContext, uri, name, mimeType, sizeBytes, lastModified,
+            phoneNumber = phoneNumber,
+            direction = when (direction) {
+                RecordingDirection.INCOMING -> "in"
+                RecordingDirection.OUTGOING -> "out"
+                else -> null
+            },
+            callType = CallType.PHONE
+        )
     }
 
     /**

@@ -64,6 +64,7 @@ class PermissionsViewModel(application: Application) : AndroidViewModel(applicat
             !status.adbConnected             -> setupAdb(onPermissionGranted)
             !status.contactsGranted          -> requestRuntimePermission(Manifest.permission.READ_CONTACTS)
             !status.phoneStateGranted        -> requestRuntimePermission(Manifest.permission.READ_PHONE_STATE)
+            !status.phoneNumbersGranted      -> requestRuntimePermission(Manifest.permission.READ_PHONE_NUMBERS)
             !status.callLogGranted           -> requestRuntimePermission(Manifest.permission.READ_CALL_LOG)
             // Battery exemption uses an Activity-result launcher (wired in PermissionsScreen) so control
             // returns to CallVault and the UI refreshes — instead of leaving the user on the system screen.

@@ -193,9 +193,13 @@ class CallSessionManager private constructor(context: Context) {
      *
      * @param stateString The telephony state string (e.g., [TelephonyManager.EXTRA_STATE_RINGING]).
      * @param phoneNumber The phone number associated with the state change. Could be null, blank, or an OEM anonymous string.
+     * @param subscriptionId The Android subscription id of the SIM this call is on, when the source
+     *   reported it ([SimSubscriptions.extractFromIntent] for broadcasts). Null means unknown: with
+     *   All SIMs selected that never blocks recording, but with an explicit SIM selected the radio
+     *   stack is consulted and a still-unknown SIM fails closed — see [SimCallFilter].
      */
     @Synchronized
-    fun handlePhoneState(stateString: String, phoneNumber: String?) {
+    fun handlePhoneState(stateString: String, phoneNumber: String?, subscriptionId: Int? = null) {
         val receivedCallState = when (stateString) {
             TelephonyManager.EXTRA_STATE_RINGING  -> TelephonyManager.CALL_STATE_RINGING
             TelephonyManager.EXTRA_STATE_OFFHOOK  -> TelephonyManager.CALL_STATE_OFFHOOK
@@ -215,9 +219,18 @@ class CallSessionManager private constructor(context: Context) {
             // Only trigger stop logic if we were previously in an active session. Prevents redundant stop commands on possible repeated IDLE broadcasts.
             if (session.isSessionActive) {
                 AppLogger.d(TAG, "Phone state is now idle (call ended). Sending stop INTENT for ${session.currentMetadata?.direction} call to RecordingForegroundService.")
+                // Snapshot before clearing: the outcome reporter needs the
+                // ended call's direction/number to pin the CallLog row.
+                // Reporting runs regardless of recording — a missed or
+                // rejected call usually has no recording at all.
+                val endedMetadata = session.currentMetadata
                 sendServiceCommand(RecordingForegroundService.ACTION_STOP_RECORDING)
                 session.clear()
+                CallEventReporter.onCallEnded(appContext, endedMetadata)
             }
+            // The call is over: per-subscription tracking has served its purpose until the next
+            // non-IDLE state restarts it. Idempotent — stray IDLEs are no-ops.
+            SimCallStateTracker.stop(appContext)
             return
         }
 
@@ -247,15 +260,19 @@ class CallSessionManager private constructor(context: Context) {
         // 3. Launch the Coroutine for RINGING or OFFHOOK
         // Canceling the previous job for the verification window logic
         sessionJob?.cancel()
+        // Per-subscription call-state tracking for the SIM gate: started on every call state so
+        // the initial callback burst lands before the record decision evaluates (enrichment and
+        // the verification window run after this). Idempotent; binder work goes off-thread.
+        managerScope.launch(Dispatchers.IO) { SimCallStateTracker.ensureStarted(appContext) }
         sessionJob = managerScope.launch {
-            processSessionUpdate(receivedCallState, phoneNumber)
+            processSessionUpdate(receivedCallState, phoneNumber, subscriptionId)
         }
     }
 
     /**
      * Processes the session update logic for RINGING and OFFHOOK states, including metadata parsing, session locking, and handling the verification window for anonymous numbers.
      */
-    private suspend fun processSessionUpdate(state: Int, phoneNumber: String?) {
+    private suspend fun processSessionUpdate(state: Int, phoneNumber: String?, subscriptionId: Int?) {
         // 1. Parse the metadata we received by the OS broadcast.
         val rawNumber: String? = PhoneNumberManager.sanitizeOemNumber(phoneNumber)
         val direction = RecordingDirection.fromCallStateOrNull(state)
@@ -268,7 +285,7 @@ class CallSessionManager private constructor(context: Context) {
             val restoredDirection = temporaryCache.restore()
             if (restoredDirection != null) {
                 withContext(Dispatchers.Main) {
-                    session.currentMetadata = RecordingMetadata(rawNumber, restoredDirection)
+                    session.currentMetadata = RecordingMetadata(rawNumber, restoredDirection, subscriptionId)
                 }
             }
         }
@@ -277,7 +294,7 @@ class CallSessionManager private constructor(context: Context) {
         if (direction != null) {
             withContext(Dispatchers.Main) {
                 // This is automatically locked after the first transition from IDLE. Only allow updating the phone number for the same direction.
-                session.currentMetadata = RecordingMetadata(rawNumber, direction)
+                session.currentMetadata = RecordingMetadata(rawNumber, direction, subscriptionId)
             }
         }
 
@@ -308,12 +325,22 @@ class CallSessionManager private constructor(context: Context) {
      * Evaluates user preferences and contact filtering to decide whether to start recording immediately or go to standby mode,
      * then sends the appropriate command to the recording service.
      */
-    private fun evaluateAndStartService() {
-        if (session.wasRecordingServiceStartIntentSend) {
+    private suspend fun evaluateAndStartService() {        if (session.wasRecordingServiceStartIntentSend) {
             AppLogger.d(TAG, "Current call session has already sent a intent that started RecordingForegroundService. Skipping duplicate intent.")
             return
         }
         val sessionMetadata = session.currentMetadata ?: throw IllegalStateException("Metadata should have been determined by now. There is a logic error.")
+
+        // Owner phone policy, checked before anything is created or sent — the
+        // same position the carrier master switch holds below. A filtered call never reaches the
+        // recording pipe: no start, no standby prompt, no daemon warm. Unlike IGNORE below this
+        // leaves wasRecordingServiceStartIntentSend unset, so a later broadcast for the same call
+        // (e.g. the second half of the double broadcast carrying the subscription id) still gets
+        // its own decision instead of being deduped into silence.
+        if (!isSimAllowed(sessionMetadata.subscriptionId)) {
+            AppLogger.i(TAG, "Call is on subscription ${sessionMetadata.subscriptionId}, owner phone number not matched — ignoring this ${sessionMetadata.direction} call entirely.")
+            return
+        }
 
         // IGNORE is genuinely "do nothing" — note that the OFFER branch is not: it posts a standby
         // notification with a Record button, on every call. Someone who turned phone-call recording
@@ -345,6 +372,61 @@ class CallSessionManager private constructor(context: Context) {
             }
         }
         session.wasRecordingServiceStartIntentSend = true
+    }
+
+    /**
+     * Whether this call's SIM passes the OWNER's phone policy.
+     *
+     * The policy is the server-synced phone NUMBER (normalized
+     * digits, null = none) — never the legacy local
+     * `selected_phone_...` preference or the legacy slot value,
+     * which no UI writes anymore and the gate no longer reads.
+     * The number resolves to the CURRENT active subscription via
+     * [PhoneNumberResolver] (primary `SubscriptionInfo.getNumber`,
+     * fallback `getPhoneNumber`; exactly-one match wins) — so a
+     * SIM moved to another slot keeps working with no
+     * reconfiguration. No match (or no number configured) fails
+     * closed without touching the stored policy.
+     *
+     * The resolved target then flows through the unchanged
+     * subscription-aware machinery (broadcast validation, slot
+     * mapping, tracker, [SimCallFilter]): an explicit policy with a
+     * still-unknown SIM fails CLOSED, while a missing-SIM target
+     * fails closed above. The legacy All-SIMs bypass survives only
+     * as an internal migration state, never as a user choice.
+     *
+     * Every decision logs its inputs (subscription ids only, never
+     * numbers), so a field failure can be pinpointed to broadcast
+     * vs. tracker vs. policy.
+     */
+    private suspend fun isSimAllowed(callSubscriptionId: Int?): Boolean {
+        // Owner-configured number (server-synced, authoritative) is
+        // the stable identity; it is resolved to the CURRENT active
+        // subscription on every call — never cached, never the slot.
+        val configuredNumber = preferences.getPhoneRecordingNumber()
+        if (configuredNumber.isNullOrBlank()) {
+            AppLogger.i(TAG, "SIM gate: no owner phone number configured — not recording this call.")
+            return false
+        }
+        // One binder batch: the active list (with per-SIM numbers for
+        // matching). The tracker itself was started when the call
+        // state arrived, so its initial callbacks are normally already
+        // in; awaitSingleActive covers the cold case with a short bound.
+        val activeSubs = withContext(Dispatchers.IO) { SimSubscriptions.list(appContext) }
+        val target = PhoneNumberResolver.resolveSubscriptionId(configuredNumber, activeSubs)
+        if (target == null) {
+            AppLogger.w(TAG, "SIM gate: configured number not on this device right now (active=${activeSubs.map { it.subscriptionId }}) — not recording.")
+            return false
+        }
+        val resolved = SimCallStateTracker.awaitSingleActive()
+        val interpreted = SimSubscriptions.interpretCallSubscription(callSubscriptionId, activeSubs, resolved)
+        if (interpreted != null && interpreted == target) return true
+        if (interpreted == null) {
+            AppLogger.w(TAG, "SIM gate: broadcast=$callSubscriptionId resolved=$resolved policyTarget=$target active=${activeSubs.map { it.subscriptionId }} — unknown, not recording.")
+        } else {
+            AppLogger.i(TAG, "SIM gate: call=$interpreted policyTarget=$target — not recording (unselected SIM).")
+        }
+        return SimCallFilter.shouldRecord(interpreted, target, selectedActive = true)
     }
 
     /**

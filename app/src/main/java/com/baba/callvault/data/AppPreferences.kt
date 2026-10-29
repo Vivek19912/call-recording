@@ -16,6 +16,8 @@ import com.baba.callvault.integrations.scrcpy.ScrcpyAudioCodec
 import com.baba.callvault.integrations.scrcpy.ScrcpyAudioSource
 import com.baba.callvault.data.StorageTarget
 import com.baba.callvault.data.SyncScheduleMode
+import com.baba.callvault.data.voip.WhatsappRecordingSource
+import com.baba.callvault.services.call.PhoneRecordingSource
 import com.baba.callvault.transcription.TranscriptionEstimate
 import com.baba.callvault.transcription.TranscriptionLanguageChoice
 import com.baba.callvault.transcription.model.TranscriptionModel
@@ -66,6 +68,7 @@ class AppPreferences(context: Context) {
             "summary_confirm_requirements", "summary_language",
             // App (VoIP) calls policy
             "voip_recording_enabled", "voip_auto_start", "voip_excluded_packages",
+            "whatsapp_recording_source",
             // Updates
             "update_check_enabled",
         )
@@ -133,6 +136,12 @@ class AppPreferences(context: Context) {
         // --- Storage & General ---
         val RECORDING_FOLDER_URI: String? = null
         const val VIBRATION_ENABLED = true
+
+        // --- WACRM upload (Phase 1) ---
+        // Off until the user opts in with a URL + API key. The default URL is the production
+        // WACRM instance; the key has no default and is stored encrypted ([WacrmSecrets]).
+        const val WACRM_ENABLED = false
+        const val WACRM_URL = "https://whatsappmax.in"
         
         // --- Automation ---
         // True keeps CallVault's behaviour for carrier calls exactly as it has always been: record
@@ -142,6 +151,8 @@ class AppPreferences(context: Context) {
         const val AUTO_RECORD_INCOMING = false
         const val AUTO_RECORD_OUTGOING = false
         const val RECORD_FROM_ANSWER = false
+        // -1 (every SIM): existing installs keep recording exactly what they recorded before.
+        const val SELECTED_PHONE_SUBSCRIPTION_ID = -1
         
         // --- Filters & Contacts ---
         const val IGNORE_ANONYMOUS_INCOMING = false
@@ -265,6 +276,15 @@ class AppPreferences(context: Context) {
         // the ring + encodes — so a recording SURVIVES the daemon being killed mid-call.
         const val HANDOFF_PERSIST_ENABLED = false
         const val VOIP_RECORDING_ENABLED = false
+        // Single effective WhatsApp recording choice ('none' default =
+        // record neither app). Replaces the two independent toggles.
+        const val WHATSAPP_RECORDING_SOURCE = "none"
+        // Owner-synced phone policy ('none' default = record no
+        // carrier calls). Never user-editable on device.
+        const val PHONE_RECORDING_SOURCE = "none"
+        // One-shot: both legacy toggles were ON, so no safe mapping
+        // exists and the UI must ask. Not exported (device-local).
+        const val WHATSAPP_SOURCE_MIGRATION_REQUIRED = false
         // True = start an app call's recording by itself, which is what VoIP recording has always
         // done. False = detect the call and offer a Record button instead. Only consulted when
         // VOIP_RECORDING_ENABLED is on.
@@ -315,6 +335,18 @@ class AppPreferences(context: Context) {
         SYNC_TIME_HOUR("sync_time_hour"),
         SYNC_TIME_MINUTE("sync_time_minute"),
         SYNC_DAY_OF_WEEK("sync_day_of_week"),
+
+        // --- WACRM upload (Phase 1) ---
+        // Deliberately NOT in EXPORTABLE_KEYS: the URL is paired with a per-device secret
+        // (the API key lives in encrypted storage, never in prefs), so exporting half the
+        // pair to another device produces a broken configuration that looks configured.
+        WACRM_ENABLED("wacrm_enabled"),
+        WACRM_URL("wacrm_url"),
+        // Explicit opt-in for background click-to-dial: when set, the app
+        // may open the native dialer by itself for an authorized WhatsApp
+        // Max request after the user granted "Display over other apps".
+        // Off by default; enabling never dials anything by itself.
+        DIAL_AUTO_OPEN("dial_auto_open"),
 
         // --- Transcription ---
         TRANSCRIPTION_MODE("transcription_mode"),
@@ -374,12 +406,27 @@ class AppPreferences(context: Context) {
         HANDOFF_PERSIST_ENABLED("handoff_persist_enabled"),
         VOIP_RECORDING_ENABLED("voip_recording_enabled"),
         VOIP_AUTO_START("voip_auto_start"),
+        WHATSAPP_RECORDING_SOURCE("whatsapp_recording_source"),
+        PHONE_RECORDING_SOURCE("phone_recording_source"),
+        /**
+         * Owner-configured phone number (normalized digits from
+         * WhatsApp Max `phone_recording_number`; null = none).
+         * Authoritative for the phone gate after a successful sync.
+         * Deliberately NOT in EXPORTABLE_KEYS: like subscription ids,
+         * a number belongs to this device's SIMs, not to a backup.
+         */
+        PHONE_RECORDING_NUMBER("phone_recording_number"),
+        WHATSAPP_SOURCE_MIGRATION_REQUIRED("whatsapp_source_migration_required"),
         
         // --- Automation ---
         CARRIER_RECORDING_ENABLED("carrier_recording_enabled"),
         AUTO_RECORD_INCOMING("auto_record_incoming"),
         AUTO_RECORD_OUTGOING("auto_record_outgoing"),
         RECORD_FROM_ANSWER("record_from_answer"),
+        // Which SIM carrier calls are recorded from: an Android subscription id, or -1 for every
+        // SIM. Deliberately NOT in EXPORTABLE_KEYS: subscription ids are per-device, so carrying
+        // one to another phone would silently filter on a SIM that means something else there.
+        SELECTED_PHONE_SUBSCRIPTION_ID("selected_phone_subscription_id"),
         
         // --- Filters & Contacts ---
         IGNORE_ANONYMOUS_INCOMING("ignore_anonymous_incoming"),
@@ -688,6 +735,73 @@ class AppPreferences(context: Context) {
      */
     fun isVoipAutoStartEnabled() = getBoolean(Key.VOIP_AUTO_START, DefaultsValue.VOIP_AUTO_START)
     fun setVoipAutoStartEnabled(enabled: Boolean) = setBoolean(Key.VOIP_AUTO_START, enabled)
+
+    /**
+     * Which WhatsApp app may be recorded — the single effective value ('none', 'whatsapp',
+     * 'whatsapp_business'; anything else stored reads back as NONE). Replaces the two
+     * independent per-app toggles, which could claim both apps at once.
+     */
+    fun getWhatsappRecordingSource(): WhatsappRecordingSource =
+        WhatsappRecordingSource.fromWire(
+            getString(Key.WHATSAPP_RECORDING_SOURCE, DefaultsValue.WHATSAPP_RECORDING_SOURCE)
+        ) ?: WhatsappRecordingSource.NONE
+
+    fun setWhatsappRecordingSource(source: WhatsappRecordingSource) =
+        setString(Key.WHATSAPP_RECORDING_SOURCE, source.wireValue)
+
+    /**
+     * One-shot migration flag: both legacy toggles were ON, so the
+     * stored source is NONE but the user must pick explicitly. The
+     * Settings UI shows a one-time prompt while this is true.
+     */
+    fun isWhatsappSourceMigrationRequired(): Boolean =
+        getBoolean(Key.WHATSAPP_SOURCE_MIGRATION_REQUIRED, DefaultsValue.WHATSAPP_SOURCE_MIGRATION_REQUIRED)
+
+    fun setWhatsappSourceMigrationRequired(required: Boolean) =
+        setBoolean(Key.WHATSAPP_SOURCE_MIGRATION_REQUIRED, required)
+
+    /**
+     * Whether the single source was ever stored (by migration, the
+     * user, or server sync). The local toggle migration runs only
+     * while this is false, so it can never clobber a synced value.
+     */
+    fun hasStoredWhatsappSource(): Boolean = prefs.contains(Key.WHATSAPP_RECORDING_SOURCE.id)
+
+    /**
+     * Which SIM normal carrier calls may record from — the OWNER's
+     * server-synced policy ('none', 'sim1', 'sim2'; anything else
+     * stored reads back as NONE). Read-only on device: no Settings
+     * control writes this key, only server sync does. The legacy
+     * local `selected_phone_subscription_id` is intentionally NOT
+     * consulted by the gate anymore (kept stored as inert history).
+     */
+    fun getPhoneRecordingSource(): PhoneRecordingSource =
+        PhoneRecordingSource.fromWire(
+            getString(Key.PHONE_RECORDING_SOURCE, DefaultsValue.PHONE_RECORDING_SOURCE)
+        ) ?: PhoneRecordingSource.NONE
+
+    fun setPhoneRecordingSource(source: PhoneRecordingSource) =
+        setString(Key.PHONE_RECORDING_SOURCE, source.wireValue)
+
+    /**
+     * Owner-configured phone number (normalized digits, null = no
+     * phone recording allowed). Server-synced value is
+     * authoritative — read-only on device, no Settings control
+     * writes this key, only server sync does. Blank reads back as
+     * null. The legacy `phone_recording_source` slot value and
+     * local `selected_phone_subscription_id` are NOT consulted by
+     * the gate anymore (kept stored as inert history).
+     */
+    fun getPhoneRecordingNumber(): String? =
+        getString(Key.PHONE_RECORDING_NUMBER, null)?.takeIf { it.isNotBlank() }
+
+    fun setPhoneRecordingNumber(number: String?) {
+        if (number.isNullOrBlank()) {
+            prefs.edit().remove(Key.PHONE_RECORDING_NUMBER.id).apply()
+        } else {
+            setString(Key.PHONE_RECORDING_NUMBER, number)
+        }
+    }
 
     /**
      * Whether "Resilient recording" (the audio-capture handoff, Option B) is enabled. Default false =
@@ -1112,6 +1226,39 @@ class AppPreferences(context: Context) {
     /** Sets the scheduled sweep day-of-week (java.util.Calendar: SUNDAY=1..SATURDAY=7). */
     fun setSyncDayOfWeek(day: Int) = setInt(Key.SYNC_DAY_OF_WEEK, day)
 
+    // -------- WACRM upload (Phase 1) --------
+
+    /**
+     * Whether finished recordings are automatically uploaded to WACRM. Off by default: uploading
+     * starts only after the user has entered a server URL and an API key and flipped this on.
+     */
+    fun isWacrmEnabled(): Boolean = getBoolean(Key.WACRM_ENABLED, DefaultsValue.WACRM_ENABLED)
+
+    /** Sets whether finished recordings are automatically uploaded to WACRM. */
+    fun setWacrmEnabled(enabled: Boolean) = setBoolean(Key.WACRM_ENABLED, enabled)
+
+    /**
+     * The WACRM server base URL (e.g. "https://whatsappmax.in"), without a trailing path. Plain
+     * preference (not a secret); the API key itself lives in encrypted storage ([WacrmSecrets]).
+     */
+    fun getWacrmUrl(): String = getString(Key.WACRM_URL, DefaultsValue.WACRM_URL) ?: DefaultsValue.WACRM_URL
+
+    /** Sets the WACRM server base URL. */
+    fun setWacrmUrl(url: String) = setString(Key.WACRM_URL, url)
+
+    /**
+     * Whether an authorized WhatsApp Max dial request may open the
+     * native dialer by itself (foreground auto-open, or background
+     * auto-open when the overlay permission was also granted).
+     * Off by default: without this, requests only ever surface as
+     * notifications that the user taps. Enabling it never dials or
+     * calls anything — the dialer always opens prefilled only.
+     */
+    fun isDialAutoOpen(): Boolean = getBoolean(Key.DIAL_AUTO_OPEN, false)
+
+    /** Sets whether authorized dial requests may open the dialer by themselves. */
+    fun setDialAutoOpen(enabled: Boolean) = setBoolean(Key.DIAL_AUTO_OPEN, enabled)
+
     // --- Retention (auto-delete old recordings; 0 = keep forever) ---
 
     /** Whether device & Drive share one retention period (true) or each has its own (false). */
@@ -1203,6 +1350,17 @@ class AppPreferences(context: Context) {
      */
     fun isCarrierRecordingEnabled() = getBoolean(Key.CARRIER_RECORDING_ENABLED, DefaultsValue.CARRIER_RECORDING_ENABLED)
     fun setCarrierRecordingEnabled(enabled: Boolean) = setBoolean(Key.CARRIER_RECORDING_ENABLED, enabled)
+
+    /**
+     * Which SIM carrier calls are recorded from, as an Android subscription id — never a slot
+     * label. [SimSubscriptions.ALL_SUBSCRIPTIONS] (-1) means every SIM: the default, so existing
+     * installs record exactly what they recorded before this setting existed.
+     */
+    fun getSelectedPhoneSubscriptionId(): Int =
+        getInt(Key.SELECTED_PHONE_SUBSCRIPTION_ID, DefaultsValue.SELECTED_PHONE_SUBSCRIPTION_ID)
+
+    fun setSelectedPhoneSubscriptionId(subscriptionId: Int) =
+        setInt(Key.SELECTED_PHONE_SUBSCRIPTION_ID, subscriptionId)
 
     fun isAutoRecordIncomingEnabled() = getBoolean(Key.AUTO_RECORD_INCOMING, DefaultsValue.AUTO_RECORD_INCOMING)
     

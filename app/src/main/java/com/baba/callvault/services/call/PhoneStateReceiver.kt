@@ -57,6 +57,10 @@ class PhoneStateReceiver : BroadcastReceiver() {
         // NOTE: According to the Android source code, in case of "Double Broadcast", if the incoming number is anonymous, it should be an empty string.
         val number = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)
 
+        // Which SIM this state change is for. Carried on both halves of the double broadcast, but
+        // absent on some OEM ROMs — null then, and an unknown SIM never blocks recording.
+        val subscriptionId = SimSubscriptions.extractFromIntent(intent)
+
         AppLogger.v(TAG, "Raw broadcast received: state=$state number=$number")
 
         // During the post-boot window, CallMonitorService holds a LIVE telephony listener and is the
@@ -70,6 +74,6 @@ class PhoneStateReceiver : BroadcastReceiver() {
 
         // Forward the phone state and number to the session manager.
         // We now forward everything (including null) to let the CallSessionManager handle the Verification Window.
-        CallSessionManager.getInstance(context).handlePhoneState(state, number)
+        CallSessionManager.getInstance(context).handlePhoneState(state, number, subscriptionId)
     }
 }

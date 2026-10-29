@@ -23,6 +23,9 @@ import kotlinx.parcelize.Parcelize
  *
  * @param rawPhoneNumber The raw phone number as received from the system, which may be in various formats or null.
  * @param direction The direction of the call (incoming or outgoing).
+ * @param subscriptionId The Android subscription id of the SIM this carrier call is on, when the
+ *   ROM reported it (see `SimSubscriptions.extractFromIntent`). Null means unknown — the call is
+ *   treated as allowed, since an unknowable SIM must not silence recording. Never a slot index.
  * @param standardizedNumber **Enrichment**: An optional standardized E.164 phone number for better display and filename generation.
  * @param isCrossCountry **Enrichment**: An optional flag indicating if the call is cross-country.
  * @param isEnriched **Enrichment**: A flag indicating whether enrichment has been attempted on this metadata instance.
@@ -31,6 +34,7 @@ import kotlinx.parcelize.Parcelize
 data class RecordingMetadata(
     val rawPhoneNumber: String?,
     val direction: RecordingDirection,
+    val subscriptionId: Int? = null,
     // -- Enrichment fields --
     val standardizedNumber: String? = null,
     val isCrossCountry: Boolean = false,

@@ -29,6 +29,8 @@ object OnboardingStatus {
      * @param notificationsGranted      True if the app can post notifications.
      * @param contactsGranted           True if READ_CONTACTS is granted.
      * @param phoneStateGranted         True if READ_PHONE_STATE is granted.
+     * @param phoneNumbersGranted       True if READ_PHONE_NUMBERS is granted (diagnostic:
+     *                                  line-number reads; not an onboarding gate).
      * @param callLogGranted            True if the app has permission to access the call log.
      * @param batteryExempted           True if the app is on the battery-optimisation whitelist.
      * @param storageSelected           True if a valid SAF recording folder has been chosen.
@@ -43,6 +45,9 @@ object OnboardingStatus {
         val notificationsGranted: Boolean,
         val contactsGranted: Boolean,
         val phoneStateGranted: Boolean,
+        // Default keeps existing constructions compiling; diagnostic only, never an
+        // onboarding gate (see isComplete).
+        val phoneNumbersGranted: Boolean = false,
         val callLogGranted: Boolean,
         val batteryExempted: Boolean,
         val storageSelected: Boolean,
@@ -56,6 +61,9 @@ object OnboardingStatus {
             // NOTE: storageSelected is intentionally NOT required here — recording-folder selection
             // moved out of onboarding into the in-app settings wizard. It remains in [Status] so the
             // wizard/UI can still surface it.
+            // NOTE: phoneNumbersGranted is likewise NOT required — line-number reads are
+            // diagnostic for now, and existing onboarded users must not be forced back
+            // through setup for it.
             return disclaimerAccepted &&
                 notificationsGranted &&
                 contactsGranted &&
@@ -80,6 +88,7 @@ object OnboardingStatus {
             notificationsGranted     = PermissionChecks.hasNotificationPermission(context),
             contactsGranted          = PermissionChecks.hasContactsPermission(context),
             phoneStateGranted        = PermissionChecks.hasPhoneStatePermission(context),
+            phoneNumbersGranted      = PermissionChecks.hasPhoneNumbersPermission(context),
             callLogGranted           = PermissionChecks.hasCallLogPermission(context),
             batteryExempted          = PermissionChecks.hasBatteryExemption(context),
             storageSelected          = SafHelper.isFolderValid(context, storageUri),

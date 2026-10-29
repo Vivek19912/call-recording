@@ -62,9 +62,9 @@ class MergePartsMigrationTest {
         db.close()
     }
 
-    private fun openV3(): RecordingDatabase =
+    private fun openCurrent(): RecordingDatabase =
         Room.databaseBuilder(context, RecordingDatabase::class.java, name)
-            .addMigrations(RecordingDatabase.MIGRATION_1_2, RecordingDatabase.MIGRATION_2_3)
+            .addMigrations(RecordingDatabase.MIGRATION_1_2, RecordingDatabase.MIGRATION_2_3, RecordingDatabase.MIGRATION_3_4, RecordingDatabase.MIGRATION_4_5)
             .allowMainThreadQueries()
             .build()
 
@@ -93,7 +93,7 @@ class MergePartsMigrationTest {
         seedVersion2()
 
         // Act — Room validates the migrated schema against the entities as it opens.
-        val db = openV3()
+        val db = openCurrent()
 
         // Assert
         assertEquals(1, db.recordingDao().getAll().size)
@@ -106,7 +106,7 @@ class MergePartsMigrationTest {
     fun parts_come_back_in_position_order_however_they_were_inserted() = runBlocking {
         // Arrange
         seedVersion2()
-        val db = openV3()
+        val db = openCurrent()
         val merged = "20260901_143200.000+0300_out_Dan.m4a"
 
         // Act — deliberately out of order, because selection order is not insertion order
@@ -131,7 +131,7 @@ class MergePartsMigrationTest {
         // The whole point of storing it: 1024 samples at 48 kHz is 21333.33 us, and an un-merged
         // part that loses this comes back 21 ms early.
         seedVersion2()
-        val db = openV3()
+        val db = openCurrent()
         val merged = "20260901_143200.000+0300_out_Dan.m4a"
 
         db.mergePartDao().insertAll(listOf(part(merged, 1, "a.m4a", 0, 236)))
@@ -143,7 +143,7 @@ class MergePartsMigrationTest {
     @Test
     fun a_recording_knows_which_merge_it_is_a_part_of() = runBlocking {
         seedVersion2()
-        val db = openV3()
+        val db = openCurrent()
         val merged = "20260901_143200.000+0300_out_Dan.m4a"
         db.mergePartDao().insertAll(listOf(part(merged, 2, "b.m4a", 236, 142)))
 
@@ -156,7 +156,7 @@ class MergePartsMigrationTest {
     fun un_merging_clears_every_part_of_that_recording_and_no_others() = runBlocking {
         // Arrange
         seedVersion2()
-        val db = openV3()
+        val db = openCurrent()
         val mergedA = "20260901_143200.000+0300_out_Dan.m4a"
         val mergedB = "20260830_101500.000+0300_in_Mum.m4a"
         db.mergePartDao().insertAll(

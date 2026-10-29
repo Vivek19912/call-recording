@@ -16,6 +16,11 @@ composeBom = "2026.05.01"
 shizuku-api = "13.1.5"
 shizuku-provider = "13.1.5"
 
+# EncryptedSharedPreferences for the WACRM API key (Phase 1 upload). The key must
+# never sit in plaintext SharedPreferences; this is the only new dependency the
+# uploader needs (uploads themselves use HttpsURLConnection, like the updater).
+security-crypto = "1.1.0-alpha06"
+
 # Persistence
 room = "2.8.4"
 ksp = "2.3.9"
@@ -55,6 +60,9 @@ aboutlibraries-compose-m3 = { module = "com.mikepenz:aboutlibraries-compose-m3",
 
 # Libphonenumber
 libphonenumber = { module = "com.googlecode.libphonenumber:libphonenumber", version.ref = "libphonenumber" }
+
+# EncryptedSharedPreferences (WACRM API key storage)
+androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "security-crypto" }
 
 # Room (recordings catalog)
 androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }

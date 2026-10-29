@@ -22,7 +22,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * The migration chain from v1, which adds the remembered duration and then the merge manifest.
+ * The migration chain from v1, which adds the remembered duration, then the merge manifest, then
+ * the WACRM upload state.
  *
  * Deliberately registers **every** migration rather than only the one under test, because that is
  * what a real upgrade does: someone who skipped a release opens a v1 file against the current
@@ -80,7 +81,7 @@ class RecordingDatabaseMigrationTest {
 
         // Act — Room validates the migrated schema against the entity as it opens.
         val db = Room.databaseBuilder(context, RecordingDatabase::class.java, name)
-            .addMigrations(RecordingDatabase.MIGRATION_1_2, RecordingDatabase.MIGRATION_2_3)
+            .addMigrations(RecordingDatabase.MIGRATION_1_2, RecordingDatabase.MIGRATION_2_3, RecordingDatabase.MIGRATION_3_4, RecordingDatabase.MIGRATION_4_5)
             .allowMainThreadQueries()
             .build()
         val rows = db.recordingDao().getAll()
@@ -94,6 +95,8 @@ class RecordingDatabaseMigrationTest {
         assertEquals(1_700_000_000_000L, entry.lastModified)
         // Never read yet, so it gets read exactly once — not never, and not every load.
         assertNull(entry.durationSeconds)
+        // Never uploaded either: a recording made before uploads existed starts unattempted.
+        assertNull(entry.wacrmUploadState)
         db.close()
     }
 
@@ -104,7 +107,7 @@ class RecordingDatabaseMigrationTest {
 
         // Act
         val db = Room.databaseBuilder(context, RecordingDatabase::class.java, name)
-            .addMigrations(RecordingDatabase.MIGRATION_1_2, RecordingDatabase.MIGRATION_2_3)
+            .addMigrations(RecordingDatabase.MIGRATION_1_2, RecordingDatabase.MIGRATION_2_3, RecordingDatabase.MIGRATION_3_4, RecordingDatabase.MIGRATION_4_5)
             .allowMainThreadQueries()
             .build()
 
@@ -122,7 +125,7 @@ class RecordingDatabaseMigrationTest {
         // Arrange
         seedVersion1()
         val db = Room.databaseBuilder(context, RecordingDatabase::class.java, name)
-            .addMigrations(RecordingDatabase.MIGRATION_1_2, RecordingDatabase.MIGRATION_2_3)
+            .addMigrations(RecordingDatabase.MIGRATION_1_2, RecordingDatabase.MIGRATION_2_3, RecordingDatabase.MIGRATION_3_4, RecordingDatabase.MIGRATION_4_5)
             .allowMainThreadQueries()
             .build()
 
@@ -131,6 +134,37 @@ class RecordingDatabaseMigrationTest {
 
         // Assert
         assertEquals(312L, db.recordingDao().getAll().single().durationSeconds)
+        db.close()
+    }
+
+    @Test
+    fun the_migrated_database_can_stamp_a_wacrm_upload_outcome() = runBlocking {
+        // Arrange
+        seedVersion1()
+        val db = Room.databaseBuilder(context, RecordingDatabase::class.java, name)
+            .addMigrations(RecordingDatabase.MIGRATION_1_2, RecordingDatabase.MIGRATION_2_3, RecordingDatabase.MIGRATION_3_4, RecordingDatabase.MIGRATION_4_5)
+            .allowMainThreadQueries()
+            .build()
+
+        // Act
+        db.recordingDao().setWacrmUploadState("20260827_154104.611+0300_voip-WhatsApp_Feroza.ogg", WacrmUploadState.UPLOADED)
+
+        // Assert
+        assertEquals(WacrmUploadState.UPLOADED, db.recordingDao().getAll().single().wacrmUploadState)
+        db.close()
+    }
+
+    @Test
+    fun old_rows_load_with_a_null_call_type_and_never_guessed() = runBlocking {
+        // Arrange — a pre-classification row migrates through every step.
+        seedVersion1()
+        val db = Room.databaseBuilder(context, RecordingDatabase::class.java, name)
+            .addMigrations(RecordingDatabase.MIGRATION_1_2, RecordingDatabase.MIGRATION_2_3, RecordingDatabase.MIGRATION_3_4, RecordingDatabase.MIGRATION_4_5)
+            .allowMainThreadQueries()
+            .build()
+
+        // Assert — the row survived with call type unclassified, not inferred.
+        assertNull(db.recordingDao().getAll().single().wacrmCallType)
         db.close()
     }
 }

@@ -74,6 +74,20 @@ interface RecordingDao {
     @Query("UPDATE recordings SET durationSeconds = :durationSeconds WHERE displayName = :displayName")
     suspend fun setDuration(displayName: String, durationSeconds: Long)
 
+    /**
+     * Stamps the WACRM upload outcome ([WacrmUploadState]) onto an existing row. No-op if absent.
+     */
+    @Query("UPDATE recordings SET wacrmUploadState = :state WHERE displayName = :displayName")
+    suspend fun setWacrmUploadState(displayName: String, state: Int)
+
+    /**
+     * Marks a row PENDING only while it has never been attempted (null). The enqueue path stamps
+     * *after* enqueueing the worker, so an unconditional write here could clobber an UPLOADED stamp
+     * the worker wrote in between — this conditional keeps that race from un-marking a success.
+     */
+    @Query("UPDATE recordings SET wacrmUploadState = :pending WHERE displayName = :displayName AND wacrmUploadState IS NULL")
+    suspend fun markWacrmPendingIfNew(displayName: String, pending: Int)
+
     @Query("DELETE FROM recordings WHERE displayName = :displayName")
     suspend fun deleteByName(displayName: String)
 

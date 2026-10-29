@@ -407,6 +407,10 @@ dependencies {
     // Libphonenumber
     implementation(libs.libphonenumber)
 
+    // EncryptedSharedPreferences: the WACRM API key (Phase 1 upload) must never sit in
+    // plaintext SharedPreferences. Nothing else uses this library.
+    implementation(libs.androidx.security.crypto)
+
     // WorkManager: reliable background task execution for post-call Drive copy.
     implementation("androidx.work:work-runtime-ktx:2.10.0")
 
@@ -438,6 +442,9 @@ dependencies {
     // Virtual time for the few pieces that debounce: a note draft's save can be asserted without
     // sleeping through it. Same version as the runtime coroutines.
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    // Real org.json for JVM unit tests: android.jar ships method stubs that throw at runtime, so any
+    // test touching WacrmAuth's GoTrue parsing needs the reference implementation on the classpath.
+    testImplementation("org.json:json:20240303")
 
     // Instrumented tests — the only way to exercise the whisper.cpp JNI bridge, which a JVM unit
     // test cannot load. Deliberately minimal: runner + JUnit extensions, no UI-testing stack.

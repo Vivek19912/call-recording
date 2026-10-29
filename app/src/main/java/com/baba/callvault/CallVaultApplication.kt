@@ -23,6 +23,7 @@ import com.baba.callvault.transcription.model.ModelRepository
 import com.baba.callvault.transcription.model.TranscriptionModel
 import com.baba.callvault.system.updates.UpdateScheduler
 import com.baba.callvault.server.RecorderConnection
+import com.baba.callvault.data.voip.WhatsappSourceMigration
 import com.baba.callvault.services.recording.VoipCaptureController
 import com.baba.callvault.utils.AppLogger
 import com.baba.callvault.system.health.SilentFailureNotifier
@@ -48,6 +49,16 @@ class CallVaultApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         AppLogger.init(applicationContext)
+
+        // One-time migration: two independent WhatsApp toggles → one
+        // mutually exclusive source. Runs before any recording gate
+        // can evaluate; idempotent and silent unless both legacy
+        // toggles were ON with VoIP enabled (then Settings prompts).
+        Thread {
+            runCatching {
+                WhatsappSourceMigration.runOnce(AppPreferences(applicationContext))
+            }.onFailure { AppLogger.w(TAG, "WhatsApp source migration failed: ${it.message}") }
+        }.apply { isDaemon = true; name = "cv-whatsapp-migrate" }.start()
 
         // Shizuku mode has no keep-alive, so nothing else would notice Shizuku dying while the app runs.
         com.baba.callvault.server.ShizukuLifecycleWatcher.install(applicationContext)

@@ -375,6 +375,14 @@ fun PermissionsContent(
                 }
                 item {
                     PermissionCard(
+                        icon = Icons.Default.Phone,
+                        label = stringResource(R.string.permission_phone_numbers_label),
+                        description = stringResource(R.string.permission_phone_numbers_description),
+                        granted = status.phoneNumbersGranted
+                    )
+                }
+                item {
+                    PermissionCard(
                         icon = Icons.Default.History,
                         label = stringResource(R.string.permission_call_log_label),
                         description = stringResource(R.string.permission_call_log_description),
@@ -752,6 +760,7 @@ private fun PermissionsScreenPreview() {
                 notificationsGranted     = false,
                 contactsGranted          = true,
                 phoneStateGranted        = false,
+                phoneNumbersGranted      = false,
                 callLogGranted           = false,
                 batteryExempted          = false,
                 storageSelected          = false,

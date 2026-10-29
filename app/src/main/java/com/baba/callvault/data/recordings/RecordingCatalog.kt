@@ -12,6 +12,7 @@ import android.content.Context
 import android.net.Uri
 import com.baba.callvault.data.recordings.db.RecordingDatabase
 import com.baba.callvault.data.recordings.db.RecordingEntry
+import com.baba.callvault.data.recordings.db.WacrmUploadState
 import com.baba.callvault.data.transcripts.TranscriptCascade
 import com.baba.callvault.utils.AppLogger
 
@@ -39,15 +40,19 @@ object RecordingCatalog {
     /**
      * Records (or refreshes) the device-folder copy of a finished recording, preserving any Drive copy
      * already stamped on the same-named row. Called at record-finish for every storage target.
+     *
+     * @param wacrmCallType the call's kind, stored as its wire value when known. A null here never
+     *   clears a previously stored value (uploads may be queued from a path that cannot tell).
      */
-    suspend fun recordLocal(context: Context, displayName: String, localUri: Uri, sizeBytes: Long, lastModified: Long) {
+    suspend fun recordLocal(context: Context, displayName: String, localUri: Uri, sizeBytes: Long, lastModified: Long, wacrmCallType: CallType? = null) {
         runCatching {
             val dao = dao(context)
             val existing = dao.findByName(displayName)
             val merged = (existing ?: RecordingEntry(displayName)).copy(
                 localUri = localUri.toString(),
                 localSizeBytes = sizeBytes.takeIf { it > 0L },
-                lastModified = lastModified.takeIf { it > 0L } ?: existing?.lastModified ?: 0L
+                lastModified = lastModified.takeIf { it > 0L } ?: existing?.lastModified ?: 0L,
+                wacrmCallType = wacrmCallType?.wireValue ?: existing?.wacrmCallType
             )
             dao.upsert(merged)
         }.onFailure { AppLogger.w(TAG, "recordLocal('$displayName') failed: ${it.message}") }
@@ -107,6 +112,38 @@ object RecordingCatalog {
         runCatching { dao(context).getAll() }.getOrElse {
             AppLogger.w(TAG, "all() failed: ${it.message}"); emptyList()
         }
+
+    /**
+     * The persisted WACRM upload state ([WacrmUploadState]) for [displayName], or null when no
+     * upload has ever been attempted. Never throws (null on failure, which reads as "not uploaded"
+     * and is the safe direction: at worst an upload is attempted, never skipped).
+     */
+    suspend fun wacrmState(context: Context, displayName: String): Int? =
+        runCatching { dao(context).findByName(displayName)?.wacrmUploadState }.getOrNull()
+
+    /**
+     * The catalog row for [displayName], or null when absent (or the read fails). The worker uses
+     * this single read for both the upload-state gate and the cached duration, so one upload costs
+     * one query instead of a full table scan plus a lookup.
+     */
+    suspend fun find(context: Context, displayName: String): RecordingEntry? =
+        runCatching { dao(context).findByName(displayName) }.getOrNull()
+
+    /**
+     * Marks [displayName] PENDING, but only if no upload was ever attempted. See
+     * [RecordingDao.markWacrmPendingIfNew]: the enqueue path stamps after enqueueing, so this must
+     * not overwrite an outcome the worker already wrote.
+     */
+    suspend fun markWacrmPending(context: Context, displayName: String) {
+        runCatching { dao(context).markWacrmPendingIfNew(displayName, WacrmUploadState.PENDING) }
+            .onFailure { AppLogger.w(TAG, "markWacrmPending('$displayName') failed: ${it.message}") }
+    }
+
+    /** Stamps a terminal WACRM upload outcome ([WacrmUploadState.UPLOADED] or [WacrmUploadState.FAILED]). */
+    suspend fun setWacrmState(context: Context, displayName: String, state: Int) {
+        runCatching { dao(context).setWacrmUploadState(displayName, state) }
+            .onFailure { AppLogger.w(TAG, "setWacrmState('$displayName') failed: ${it.message}") }
+    }
 
     /**
      * Removes the recording (all copies) from the catalog, and with it any transcript.

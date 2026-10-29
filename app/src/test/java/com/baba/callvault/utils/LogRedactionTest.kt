@@ -321,4 +321,40 @@ class LogRedactionTest {
     fun `a bare number with no unit is still redacted`() {
         assertEquals("Number: [PHONE_REDACTED]", redact("Number: 0544557278"))
     }
+
+    // --- API secrets ---
+
+    @Test
+    fun `a wacrm api key never survives redaction`() {
+        // Shape-real, value-fake: the rule keys on the prefix, never on any real secret.
+        val key = "wacrm_live_TESTKEY0123456789abcdef"
+        assertEquals(
+            "Upload failed: ${LogRedaction.WACRM_KEY_PLACEHOLDER}",
+            redact("Upload failed: $key")
+        )
+        assertEquals(
+            "Header Bearer ${LogRedaction.WACRM_KEY_PLACEHOLDER} sent",
+            redact("Header Bearer $key sent")
+        )
+    }
+
+    @Test
+    fun `a jwt access token never survives redaction`() {
+        // Shape-real, value-fake: three base64url segments, no real credential.
+        val token = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0LXVzZXIifQ.dGVzdC1zaWduYXR1cmU"
+        assertEquals(
+            "Auth failed: ${LogRedaction.TOKEN_PLACEHOLDER}",
+            redact("Auth failed: $token")
+        )
+        assertEquals(
+            "Header Bearer ${LogRedaction.TOKEN_PLACEHOLDER} sent",
+            redact("Header Bearer $token sent")
+        )
+    }
+
+    @Test
+    fun `ordinary dotted strings are not tokens`() {
+        assertEquals("v1.2.3 released", redact("v1.2.3 released"))
+        assertEquals("call.ogg ready", redact("call.ogg ready"))
+    }
 }

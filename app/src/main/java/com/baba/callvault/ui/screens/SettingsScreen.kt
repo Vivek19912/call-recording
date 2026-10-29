@@ -41,6 +41,8 @@ import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -52,6 +54,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -95,6 +99,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.first
 import androidx.annotation.StringRes
 import com.baba.callvault.data.AppPreferences
+import com.baba.callvault.data.WacrmSession
+import com.baba.callvault.system.storage.WacrmAuth
 import com.baba.callvault.system.AppLock
 import com.baba.callvault.data.ModeCapability
 import com.baba.callvault.integrations.adb.AdbShell
@@ -122,6 +128,8 @@ import com.baba.callvault.integrations.scrcpy.ScrcpyAudioCodec
 import com.baba.callvault.integrations.scrcpy.ScrcpyAudioSource
 import com.baba.callvault.integrations.scrcpy.ScrcpyConfig
 import com.baba.callvault.system.storage.SafHelper
+import com.baba.callvault.system.storage.WacrmApi
+import com.baba.callvault.system.storage.WhatsappSourceSync
 import com.baba.callvault.system.takePersistableFolderPermission
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.baba.callvault.ui.common.ContactSelectionDialog
@@ -153,6 +161,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.SimCard
+import androidx.compose.material3.RadioButton
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
@@ -173,6 +183,11 @@ import com.baba.callvault.ui.common.OfflineRecordingDialog
 import com.baba.callvault.system.storage.MinDurationPolicy
 import com.baba.callvault.system.storage.StorageCapPolicy
 import com.baba.callvault.data.voip.VoipAppPolicy
+import com.baba.callvault.data.voip.WhatsappCallPolicy
+import com.baba.callvault.data.voip.WhatsappRecordingSource
+import com.baba.callvault.services.call.SimInfo
+import com.baba.callvault.services.call.PhoneNumberResolver
+import com.baba.callvault.services.call.SimSubscriptions
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.LocalResources
 import org.xmlpull.v1.XmlPullParser
@@ -721,10 +736,12 @@ private const val SECTION_GENERAL = "general"
 // Sub-section keys. Scoped to their parent section, so the same value can never collide across two.
 private const val SUB_FILE_NAME = "sub_file_name"
 private const val SUB_PHONE_CALLS = "sub_phone_calls"
+private const val SUB_WHATSAPP_SOURCE = "sub_whatsapp_source"
 private const val SUB_INCOMING = "sub_incoming"
 private const val SUB_OUTGOING = "sub_outgoing"
 private const val SUB_WHERE = "sub_where"
 private const val SUB_UPLOAD = "sub_upload"
+private const val SUB_WACRM = "sub_wacrm"
 private const val SUB_RETENTION = "sub_retention"
 private const val SUB_VISUAL = "sub_visual"
 private const val SUB_PRIVACY = "sub_privacy"
@@ -824,6 +841,8 @@ private fun RecordingSection(
             checked = carrierRecording,
             onCheckedChange = { actions.setCarrierRecording(it) }
         )
+        // Read-only: which SIM the owner allows is server policy, not a local pick.
+        PhonePolicyStatus(preferences = preferences, updateTrigger = updateTrigger)
       }
 
       AnimatedVisibility(
@@ -916,6 +935,21 @@ private fun RecordingSection(
         }
       }
     }
+
+      // WhatsApp recording sits outside the phone-call visibility gate above on purpose:
+      // it is an app call governed by the owner-synced source, not by the carrier master
+      // switch. Exactly one app (or neither) records — the gate in VoipRecordingCoordinator
+      // enforces the stored source before creating anything. Read-only: no local control.
+      SettingsSubSection(
+        title = stringResource(R.string.settings_subsection_whatsapp_recording),
+        expanded = openSub == SUB_WHATSAPP_SOURCE,
+        onToggle = { openSub = if (openSub == SUB_WHATSAPP_SOURCE) null else SUB_WHATSAPP_SOURCE },
+      ) {
+        WhatsappSourceStatus(
+            prefs = preferences,
+            updateTrigger = updateTrigger,
+        )
+      }
 
     if (showFileNameFormatDialog) {
         FileNameFormatDialog(
@@ -1042,6 +1076,12 @@ private fun StorageSection(
         }
 
         SettingsSubSection(
+            title = stringResource(R.string.settings_wacrm_title),
+            expanded = openSub == SUB_WACRM,
+            onToggle = { openSub = if (openSub == SUB_WACRM) null else SUB_WACRM },
+        ) { WacrmSubSection(preferences, updateTrigger) }
+
+        SettingsSubSection(
             title = stringResource(R.string.settings_section_retention),
             expanded = openSub == SUB_RETENTION,
             onToggle = { openSub = if (openSub == SUB_RETENTION) null else SUB_RETENTION },
@@ -1051,6 +1091,314 @@ private fun StorageSection(
         // merge leaves behind on the phone. It never affects whether a merged call can be taken
         // apart, which the description says so nobody keeps originals out of misplaced caution.
         MergeSubSection(preferences, updateTrigger)
+    }
+}
+
+/**
+ * WhatsApp Max connection: email + password login that stores an encrypted user session.
+ * Replaces the former API-key UI — no key is created, copied, or displayed anywhere here.
+ *
+ * States:
+ * - Disconnected: server URL (shared control above) + email + password + Connect.
+ * - Connecting: in-flight login, inputs disabled.
+ * - Connected: account + user summary from the server-verified session + Disconnect.
+ *
+ * The password lives only in this composable's locals and the login call: it is never written
+ * to prefs, never logged, and the field is cleared the moment Connect is tapped. After a
+ * successful login only the session (encrypted) remains.
+ */
+@Composable
+private fun WacrmSubSection(preferences: AppPreferences, updateTrigger: Int) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var enabled by remember(updateTrigger) { mutableStateOf(preferences.isWacrmEnabled()) }
+    var url by remember(updateTrigger) { mutableStateOf(preferences.getWacrmUrl()) }
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+    var connecting by remember { mutableStateOf(false) }
+    var session by remember { mutableStateOf<WacrmSession.Session?>(null) }
+    // One-shot notice (success/error text), cleared by the next edit.
+    var notice by remember { mutableStateOf<String?>(null) }
+    // Null while the encrypted store has not answered yet.
+    var sessionChecked by remember { mutableStateOf(false) }
+
+    LaunchedEffect(updateTrigger) {
+        session = withContext(Dispatchers.IO) { WacrmSession.get(context) }
+        sessionChecked = true
+    }
+
+    val urlValid = remember(url) { WacrmApi.normalizeBaseUrl(url) != null }
+
+    SettingsToggleRow(
+        label = stringResource(R.string.settings_wacrm_enable_label),
+        description = stringResource(R.string.settings_wacrm_enable_desc),
+        checked = enabled,
+        onCheckedChange = {
+            enabled = it
+            preferences.setWacrmEnabled(it)
+        }
+    )
+
+    SettingsDivider()
+
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Text(
+            text = stringResource(R.string.settings_wacrm_url_label),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(Modifier.height(6.dp))
+        OutlinedTextField(
+            value = url,
+            onValueChange = {
+                url = it
+                preferences.setWacrmUrl(it)
+            },
+            singleLine = true,
+            placeholder = { Text("https://whatsappmax.in") },
+            isError = url.isNotBlank() && !urlValid,
+            modifier = Modifier.fillMaxWidth()
+        )
+        HintText(stringResource(R.string.settings_wacrm_url_hint))
+    }
+
+    SettingsDivider()
+
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Text(
+            text = stringResource(R.string.settings_wacrm_connect_title),
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = stringResource(R.string.settings_wacrm_connect_desc),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(8.dp))
+        if (!sessionChecked) {
+            // Store not answered yet — show nothing rather than flashing "not connected".
+        } else if (session != null) {
+            val s = session!!
+            Text(
+                text = stringResource(R.string.settings_wacrm_connected),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Account:\n${s.accountName ?: s.accountId}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = "User:\n${s.userName ?: s.userEmail ?: s.userId}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    onClick = {
+                        val current = session
+                        scope.launch(Dispatchers.IO) {
+                            // Best-effort server revocation first, then wipe local credentials
+                            // unconditionally — Disconnect must always leave nothing behind.
+                            if (current != null) {
+                                val base = WacrmApi.normalizeBaseUrl(preferences.getWacrmUrl())
+                                if (base != null) {
+                                    val config = WacrmAuth.fetchMobileConfig(base)
+                                    if (config != null) {
+                                        WacrmAuth.signOut(config, current.accessToken)
+                                    }
+                                }
+                            }
+                            WacrmSession.clear(context)
+                            withContext(Dispatchers.Main) {
+                                session = null
+                                password = ""
+                                notice = null
+                            }
+                        }
+                    }
+                ) { Text(stringResource(R.string.settings_wacrm_disconnect)) }
+            }
+        } else {
+            OutlinedTextField(
+                value = email,
+                onValueChange = {
+                    email = it
+                    notice = null
+                },
+                singleLine = true,
+                placeholder = { Text(stringResource(R.string.settings_wacrm_email_hint)) },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !connecting
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = password,
+                onValueChange = {
+                    password = it
+                    notice = null
+                },
+                singleLine = true,
+                visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = {
+                    IconButton(
+                        onClick = { showPassword = !showPassword },
+                        enabled = !connecting
+                    ) {
+                        Icon(
+                            imageVector = if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                            contentDescription = if (showPassword) "Hide password" else "Show password"
+                        )
+                    }
+                },
+                placeholder = { Text(stringResource(R.string.settings_wacrm_password_label)) },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !connecting
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    onClick = {
+                        val base = WacrmApi.normalizeBaseUrl(url)
+                        if (base == null) {
+                            notice = context.getString(R.string.settings_wacrm_unreachable)
+                            return@TextButton
+                        }
+                        connecting = true
+                        notice = context.getString(R.string.settings_wacrm_connecting)
+                        val emailValue = email.trim()
+                        val passwordValue = password
+                        // The password leaves this composable now: cleared from the field
+                        // immediately so it cannot linger on screen or in state.
+                        password = ""
+                        scope.launch(Dispatchers.IO) {
+                            var failureNotice: String? = null
+                            val config = WacrmAuth.fetchMobileConfig(base)
+                            if (config == null) {
+                                failureNotice =
+                                    context.getString(R.string.settings_wacrm_unreachable)
+                            } else {
+                                when (val login = WacrmAuth.signIn(config, emailValue, passwordValue)) {
+                                    is WacrmAuth.AuthOutcome.Ok -> {
+                                        val me = WacrmAuth.fetchMe(base, login.session.accessToken)
+                                        if (me == null) {
+                                            failureNotice =
+                                                context.getString(R.string.settings_wacrm_unreachable)
+                                        } else {
+                                            WacrmSession.save(
+                                                context,
+                                                login.session.accessToken,
+                                                login.session.refreshToken,
+                                                login.session.expiresAtMs,
+                                                me.userId,
+                                                me.userEmail,
+                                                me.fullName,
+                                                me.accountId,
+                                                me.accountName,
+                                                me.role
+                                            )
+                                            // Pull this user's WhatsApp recording source now
+                                            // that the session exists. A failed sync keeps
+                                            // the last-known source — never a silent flip.
+                                            WhatsappSourceSync.syncAfterAuth(
+                                                context,
+                                                base,
+                                                login.session.accessToken
+                                            )
+                                        }
+                                    }
+                                    is WacrmAuth.AuthOutcome.InvalidCredentials ->
+                                        failureNotice =
+                                            context.getString(R.string.settings_wacrm_bad_credentials)
+                                    is WacrmAuth.AuthOutcome.NetworkError,
+                                    is WacrmAuth.AuthOutcome.ServerError ->
+                                        failureNotice =
+                                            context.getString(R.string.settings_wacrm_unreachable)
+                                }
+                            }
+                            withContext(Dispatchers.Main) {
+                                connecting = false
+                                if (failureNotice != null) {
+                                    notice = failureNotice
+                                } else {
+                                    notice = null
+                                    session = WacrmSession.get(context)
+                                }
+                            }
+                        }
+                    },
+                    enabled = !connecting && email.isNotBlank() && password.isNotEmpty()
+                ) { Text(stringResource(R.string.settings_wacrm_connect)) }
+            }
+        }
+        if (notice != null) HintText(notice!!)
+
+        SettingsDivider()
+
+        // Click-to-dial auto-open: explicit opt-in, off by default.
+        // When on AND the system "Display over other apps" permission is
+        // granted, an authorized WhatsApp Max dial request opens the
+        // native dialer by itself (foreground immediately; background
+        // via a brief on-screen notice, at most every 15 minutes while
+        // the app is closed). Otherwise every request arrives as a
+        // notification to tap. Nothing here ever places a call.
+        var autoOpen by remember(updateTrigger) { mutableStateOf(preferences.isDialAutoOpen()) }
+        var overlayTick by remember { mutableStateOf(0) }
+        val canOverlay = remember(updateTrigger, overlayTick) {
+            android.provider.Settings.canDrawOverlays(context)
+        }
+        SettingsToggleRow(
+            label = stringResource(R.string.settings_wacrm_auto_open_label),
+            description = stringResource(R.string.settings_wacrm_auto_open_desc),
+            checked = autoOpen,
+            onCheckedChange = {
+                autoOpen = it
+                preferences.setDialAutoOpen(it)
+                com.baba.callvault.system.storage.DialPollScheduler.apply(context)
+            }
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (canOverlay) stringResource(R.string.settings_wacrm_auto_open_granted)
+                else stringResource(R.string.settings_wacrm_auto_open_missing),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = { overlayTick += 1 }) {
+                Text(stringResource(R.string.settings_wacrm_auto_open_recheck))
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(
+                onClick = {
+                    context.startActivity(
+                        android.content.Intent(
+                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            android.net.Uri.parse("package:" + context.packageName)
+                        )
+                    )
+                }
+            ) { Text(stringResource(R.string.settings_wacrm_auto_open_grant)) }
+        }
     }
 }
 
@@ -2327,7 +2675,13 @@ private fun VoipAppPicker(prefs: AppPreferences) {
     ) {
         NestedGroup {
             SettingsHint(stringResource(R.string.settings_voip_apps_hint))
-            loaded?.forEach { app ->
+            // WhatsApp and WhatsApp Business are governed by the single
+            // WhatsApp recording source (Settings → WhatsApp Recording),
+            // not by this list — showing them here would offer a second,
+            // competing switch for the same call.
+            loaded?.filterNot { app ->
+                WhatsappRecordingSource.isWhatsappFamily(app.packageName)
+            }?.forEach { app ->
                 SettingsToggleRow(
                     label = app.label,
                     checked = app.packageName !in excluded,
@@ -2338,6 +2692,176 @@ private fun VoipAppPicker(prefs: AppPreferences) {
                 )
             }
         }
+    }
+}
+
+/**
+ * Owner phone policy, read-only. Shows the server-synced phone
+ * NUMBER (the stable owner identity) with the SIM slot it is
+ * currently detected on — or "Configured number not detected" /
+ * "No phone number configured" with recording disabled. The
+ * mapping is recomputed from the live subscription list on every
+ * composition via [PhoneNumberResolver] (primary
+ * `SubscriptionInfo.getNumber`, fallback `getPhoneNumber`), so a
+ * SIM moved to another slot is picked up with no reconfiguration.
+ * No controls: the salesperson cannot change this.
+ *
+ * The displayed line is the CONFIGURED number, never the remote
+ * caller of any call — per-call remote numbers are labelled
+ * separately wherever they appear.
+ */
+@Composable
+private fun PhonePolicyStatus(preferences: AppPreferences, updateTrigger: Int) {
+    val context = LocalContext.current
+    var sims by remember { mutableStateOf<List<SimInfo>?>(null) }
+    val configuredNumber = remember(updateTrigger) { preferences.getPhoneRecordingNumber() }
+
+    LaunchedEffect(Unit) {
+        sims = withContext(Dispatchers.IO) { SimSubscriptions.list(context) }
+    }
+
+    val matchedId = sims?.let { PhoneNumberResolver.resolveSubscriptionId(configuredNumber, it) }
+    val matchedSim = sims?.firstOrNull { it.subscriptionId == matchedId }
+
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(
+            text = stringResource(R.string.settings_phone_calls_label),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.secondary
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        if (configuredNumber.isNullOrBlank()) {
+            StatusLine(
+                text = stringResource(R.string.settings_phone_number_not_configured),
+                state = PolicyState.DISABLED
+            )
+        } else {
+            Text(
+                text = PhoneNumberResolver.formatForDisplay(configuredNumber),
+                style = MaterialTheme.typography.bodyMedium
+            )
+            if (sims == null) {
+                // Still enumerating; the configured number above is already shown.
+            } else if (matchedSim == null) {
+                StatusLine(
+                    text = stringResource(R.string.settings_configured_number_not_detected),
+                    state = PolicyState.UNAVAILABLE
+                )
+                StatusLine(
+                    text = stringResource(R.string.settings_policy_disabled),
+                    state = PolicyState.DISABLED
+                )
+            } else {
+                val slot = matchedSim.slotIndex + 1
+                Text(
+                    text = stringResource(R.string.settings_sim_slot, slot),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                StatusLine(
+                    text = stringResource(R.string.settings_policy_enabled),
+                    state = PolicyState.ENABLED
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        SettingsHint(stringResource(R.string.settings_managed_by_whatsapp_max))
+    }
+}
+
+private enum class PolicyState { ENABLED, DISABLED, UNAVAILABLE }
+
+/** Status dot + label. Informational only — never a control. */
+@Composable
+private fun StatusLine(text: String, state: PolicyState) {
+    val color = when (state) {
+        PolicyState.ENABLED -> MaterialTheme.colorScheme.primary
+        PolicyState.DISABLED -> MaterialTheme.colorScheme.onSurfaceVariant
+        PolicyState.UNAVAILABLE -> MaterialTheme.colorScheme.error
+    }
+    Text(
+        text = "● $text",
+        style = MaterialTheme.typography.bodySmall,
+        color = color
+    )
+}
+
+
+/**
+ * Owner WhatsApp policy, read-only. Shows the server-synced source
+ * (None / WhatsApp / WhatsApp Business) and whether it currently
+ * authorizes recording. No controls: the salesperson cannot change
+ * this. The app name is shown — never a phone number, because no
+ * reliable WhatsApp number exists.
+ *
+ * When a both-toggles migration left the choice ambiguous, a
+ * blocking one-time prompt forces the explicit pick (effective
+ * source stays none until then — never silently both).
+ */
+@Composable
+private fun WhatsappSourceStatus(
+    prefs: AppPreferences,
+    updateTrigger: Int,
+) {
+    var source by remember(updateTrigger) { mutableStateOf(prefs.getWhatsappRecordingSource()) }
+    var showMigration by remember(updateTrigger) {
+        mutableStateOf(prefs.isWhatsappSourceMigrationRequired())
+    }
+
+    fun pick(next: WhatsappRecordingSource) {
+        source = next
+        prefs.setWhatsappRecordingSource(next)
+        prefs.setWhatsappSourceMigrationRequired(false)
+        showMigration = false
+    }
+
+    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Text(
+            text = stringResource(R.string.settings_whatsapp_calls_label),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.secondary
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = when (source) {
+                WhatsappRecordingSource.NONE -> stringResource(R.string.settings_whatsapp_source_none)
+                WhatsappRecordingSource.WHATSAPP -> stringResource(R.string.settings_whatsapp_source_whatsapp)
+                WhatsappRecordingSource.WHATSAPP_BUSINESS -> stringResource(R.string.settings_whatsapp_source_business)
+            },
+            style = MaterialTheme.typography.bodyMedium
+        )
+        StatusLine(
+            text = stringResource(
+                if (source == WhatsappRecordingSource.NONE) R.string.settings_policy_disabled
+                else R.string.settings_policy_enabled
+            ),
+            state = if (source == WhatsappRecordingSource.NONE) PolicyState.DISABLED else PolicyState.ENABLED
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        SettingsHint(stringResource(R.string.settings_managed_by_whatsapp_max))
+    }
+
+    if (showMigration) {
+        AlertDialog(
+            // No dismiss: both legacy toggles were ON, so there is no safe
+            // default to fall back to — the user must pick explicitly.
+            onDismissRequest = { },
+            title = { Text(stringResource(R.string.settings_whatsapp_migration_title)) },
+            text = { Text(stringResource(R.string.settings_whatsapp_migration_message)) },
+            confirmButton = {
+                Column {
+                    TextButton(onClick = { pick(WhatsappRecordingSource.NONE) }) {
+                        Text(stringResource(R.string.settings_whatsapp_source_none))
+                    }
+                    TextButton(onClick = { pick(WhatsappRecordingSource.WHATSAPP) }) {
+                        Text(stringResource(R.string.settings_whatsapp_source_whatsapp))
+                    }
+                    TextButton(onClick = { pick(WhatsappRecordingSource.WHATSAPP_BUSINESS) }) {
+                        Text(stringResource(R.string.settings_whatsapp_source_business))
+                    }
+                }
+            },
+        )
     }
 }
 
