@@ -18,8 +18,8 @@ package com.baba.callvault.system.diagnostics
  */
 object ReportBundle {
 
-    const val DEBUG_REPORT_NAME = "callvault_debug_report.txt"
-    const val SYSTEM_REPORT_NAME = "callvault_system_report.txt"
+    const val DEBUG_REPORT_NAME = "call-recorder-debug-report.txt"
+    const val SYSTEM_REPORT_NAME = "call-recorder-system-report.txt"
 
     /** [systemReport] is null when it could not be collected; the debug report is saved on its own then. */
     fun combine(debugReport: String, systemReport: String?): String = buildString {
@@ -34,9 +34,9 @@ object ReportBundle {
         }
     }
 
-    /** What the save dialog proposes, sortable by name: `callvault_report_2026-09-11_14-30.txt`. */
+    /** What the save dialog proposes, sortable by name: `call-recorder-report_2026-09-11_14-30.txt`. */
     fun suggestedFileName(year: Int, month: Int, day: Int, hour: Int, minute: Int): String =
-        "callvault_report_%04d-%02d-%02d_%02d-%02d.txt".format(year, month, day, hour, minute)
+        "call-recorder-report_%04d-%02d-%02d_%02d-%02d.txt".format(year, month, day, hour, minute)
 
     private fun header(name: String) = "===== $name =====\n"
 }

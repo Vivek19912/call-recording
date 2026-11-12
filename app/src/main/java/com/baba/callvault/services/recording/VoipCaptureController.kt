@@ -28,13 +28,25 @@ object VoipCaptureController {
     private const val TAG = "CV:VoipCtl"
 
     /**
+     * Whether the Owner authorizes any WhatsApp-family recording for this
+     * user (selection is `whatsapp` or `whatsapp_business`). When true the
+     * capture policy must be armed and detection must run even if the local
+     * VoIP switches are off — local switches can never suppress an
+     * Owner-authorized application.
+     */
+    fun isOwnerWhatsappSelected(context: Context): Boolean {
+        val source = runCatching { AppPreferences(context).getWhatsappRecordingSource() }.getOrNull()
+        return source != null && source != com.baba.callvault.data.voip.WhatsappRecordingSource.NONE
+    }
+
+    /**
      * Brings the policy into line with the preference. Blocking (binder + possibly a daemon launch), so
      * call it off the main thread.
      *
      * @return true when the feature is on AND the policy is armed — i.e. VoIP calls can be recorded.
      */
     fun sync(context: Context): Boolean {
-        val wanted = AppPreferences(context).isVoipRecordingEnabled()
+        val wanted = AppPreferences(context).isVoipRecordingEnabled() || isOwnerWhatsappSelected(context)
         if (!wanted) {
             runCatching { RecorderConnection.service?.disarmVoipCapture() }
                 .onFailure { AppLogger.d(TAG, "disarm skipped: ${it.message}") }

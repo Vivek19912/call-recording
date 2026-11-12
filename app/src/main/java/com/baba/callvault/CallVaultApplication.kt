@@ -10,6 +10,7 @@ package com.baba.callvault
 
 import android.app.Application
 import com.baba.callvault.system.storage.CutOffRescueWorker
+import com.baba.callvault.system.storage.CallEventRecovery
 import com.baba.callvault.data.AppPreferences
 import com.baba.callvault.server.RecorderBackend
 import com.baba.callvault.server.ShizukuBackend
@@ -60,6 +61,20 @@ class CallVaultApplication : Application() {
             }.onFailure { AppLogger.w(TAG, "WhatsApp source migration failed: ${it.message}") }
         }.apply { isDaemon = true; name = "cv-whatsapp-migrate" }.start()
 
+        // One-time recovery: CallVault versions that serialized
+        // duration_seconds as a JSON string had those events rejected
+        // with HTTP 400 into FAILED. Requeue them once with the same
+        // ids (the server dedupes on its idempotency key, so already-
+        // stored events just confirm). Idempotent and silent: unique
+        // work names plus a persistent marker make reruns no-ops.
+        Thread {
+            runCatching {
+                kotlinx.coroutines.runBlocking {
+                    CallEventRecovery.maybeRecoverOnce(applicationContext)
+                }
+            }.onFailure { AppLogger.w(TAG, "Call event recovery failed: ${it.message}") }
+        }.apply { isDaemon = true; name = "cv-call-event-recovery" }.start()
+
         // Shizuku mode has no keep-alive, so nothing else would notice Shizuku dying while the app runs.
         com.baba.callvault.server.ShizukuLifecycleWatcher.install(applicationContext)
 
@@ -99,7 +114,8 @@ class CallVaultApplication : Application() {
             // A fresh host collects nothing until it is told to. Do this first and cheaply, so a daemon
             // that relaunched mid-session is logging again before anything else happens to it.
             RecorderBackend.syncDiagnostics(applicationContext)
-            if (AppPreferences(applicationContext).isVoipRecordingEnabled()) {
+            val prefs = AppPreferences(applicationContext)
+            if (prefs.isVoipRecordingEnabled() || VoipCaptureController.isOwnerWhatsappSelected(applicationContext)) {
                 Thread {
                     runCatching { VoipCaptureController.sync(applicationContext) }
                         .onFailure { AppLogger.w(TAG, "VoIP re-arm failed: ${it.message}") }
@@ -131,7 +147,12 @@ class CallVaultApplication : Application() {
 
         // Reconcile the daily update check with the saved prefs (same idempotent pattern), then run
         // an immediate throttled check so a new release surfaces on app open, not just once a day.
+        // Automatic update checking is permanently disabled (isUpdateCheckEnabled() is hardcoded
+        // false): still force the stored flag OFF so a `true` left by an older version can never
+        // linger, then reconcile (cancels any previously scheduled periodic work) — the throttled
+        // on-open check below is a no-op for the same reason.
         runCatching {
+            AppPreferences(applicationContext).setUpdateCheckEnabled(false)
             UpdateScheduler.apply(applicationContext)
             UpdateScheduler.checkNowIfDue(applicationContext)
         }.onFailure { AppLogger.w(TAG, "Update scheduler apply failed: ${it.message}") }

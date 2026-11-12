@@ -26,7 +26,6 @@ import com.baba.callvault.ui.navigation.NotificationDestination
 import com.baba.callvault.ui.navigation.OpenRecordingRequest
 import com.baba.callvault.ui.navigation.OpenTranscriptRequest
 import com.baba.callvault.system.storage.DialPhoneValidation
-import com.baba.callvault.system.storage.DialSync
 import com.baba.callvault.system.storage.OpenDialRequest
 import com.baba.callvault.ui.screens.AppLockScreen
 import com.baba.callvault.ui.screens.AppLockUi
@@ -264,9 +263,10 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Live re-validation + dial + `opened` ack, off the main thread.
-     * Best-effort: an unreachable server leaves the row `delivered`
-     * (a later poll re-notifies) and still opens the dialer for the
-     * already-validated number; a definitively dead row never opens.
+     * One authoritative read of this request id (not a list poll).
+     * Best-effort: an unreachable server still opens the dialer for
+     * the already-validated number; a definitively dead row never
+     * opens.
      */
     private fun validateAndOpenDialer(number: String, dialId: String) {
         val tag = "CV:Dial"
@@ -276,29 +276,36 @@ class MainActivity : AppCompatActivity() {
         val token = if (base != null) {
             com.baba.callvault.system.storage.DialSession.freshAccessToken(app, base)
         } else null
-        var liveRow: com.baba.callvault.system.storage.DialRequests.DialRequest? = null
         var serverReachable = false
+        val deviceId = com.baba.callvault.system.storage.DialDeviceId.get(app)
         if (base != null && token != null) {
-            when (val fetched = com.baba.callvault.system.storage.DialRequests.fetchPending(base, token)) {
-                is com.baba.callvault.system.storage.DialRequests.FetchResult.Success -> {
+            when (val fetched = com.baba.callvault.system.storage.DialRequests.fetchOne(base, token, dialId, deviceId = deviceId)) {
+                is com.baba.callvault.system.storage.DialRequests.FetchOneResult.Success -> {
                     serverReachable = true
-                    liveRow = fetched.requests.firstOrNull { it.id == dialId }
+                    val row = fetched.request
+                    val usable = (row.status == "pending" || row.status == "delivered") &&
+                        !com.baba.callvault.system.storage.DialRequests.isExpired(
+                            row.expiresAt, System.currentTimeMillis()
+                        )
+                    if (!usable) {
+                        com.baba.callvault.utils.AppLogger.i(tag, "Dial tap: request ${com.baba.callvault.system.storage.DialRequests.maskId(dialId)} no longer live; dialer not opened")
+                        notifyDialUnavailable("That dial request expired or was already handled.")
+                        return
+                    }
+                }
+                is com.baba.callvault.system.storage.DialRequests.FetchOneResult.HttpFailure -> {
+                    serverReachable = true
+                    if (fetched.statusCode == 404 || fetched.statusCode == 410 || fetched.statusCode == 409) {
+                        com.baba.callvault.utils.AppLogger.i(tag, "Dial tap: request ${com.baba.callvault.system.storage.DialRequests.maskId(dialId)} no longer live (HTTP ${fetched.statusCode}); dialer not opened")
+                        notifyDialUnavailable("That dial request expired or was already handled.")
+                        return
+                    }
                 }
                 else -> serverReachable = false
             }
         }
-        if (serverReachable) {
-            val row = liveRow
-            val usable = row != null &&
-                (row.status == "pending" || row.status == "delivered") &&
-                !com.baba.callvault.system.storage.DialRequests.isExpired(
-                    row.expiresAt, System.currentTimeMillis()
-                )
-            if (!usable) {
-                com.baba.callvault.utils.AppLogger.i(tag, "Dial tap: request ${com.baba.callvault.system.storage.DialRequests.maskId(dialId)} no longer live; dialer not opened")
-                notifyDialUnavailable("That dial request expired or was already handled.")
-                return
-            }
+        if (!serverReachable) {
+            com.baba.callvault.utils.AppLogger.w(tag, "Dial tap: could not re-validate ${com.baba.callvault.system.storage.DialRequests.maskId(dialId)}; opening for the validated number")
         }
         val telUri = DialPhoneValidation.toTelUri(number)
         if (telUri == null) {
@@ -315,9 +322,9 @@ class MainActivity : AppCompatActivity() {
         }.getOrDefault(false)
         // The explicit tap is the consumption event: ack `opened`
         // (server-side one-time consumption). A failed ack leaves
-        // the row `delivered` so a later poll re-notifies instead
-        // of losing the request. A 409 means another of the user's
-        // devices already consumed it — also fine, nothing to redo.
+        // the row `delivered`; the socket never replays delivered
+        // rows, so nothing redials. A 409 means another of the same
+        // user's devices already consumed it — also fine.
         if (ackDialOpened(opened, base, token, dialId)) {
             com.baba.callvault.utils.AppLogger.i(tag, "Dial tap: opened acked")
         }
@@ -338,7 +345,10 @@ class MainActivity : AppCompatActivity() {
             }
             return false
         }
-        val code = com.baba.callvault.system.storage.DialRequests.ack(base, token, dialId, "opened")
+        val code = com.baba.callvault.system.storage.DialRequests.ack(
+            base, token, dialId, "opened",
+            deviceId = com.baba.callvault.system.storage.DialDeviceId.get(this)
+        )
         return code in 200..299
     }
 
@@ -350,6 +360,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        isAppForeground = true
         applySecureFlag()
         if (AppLock.isEnabled(this) && !isUnlocked) promptForUnlock()
     }
@@ -365,70 +376,34 @@ class MainActivity : AppCompatActivity() {
         if (AppPreferences(applicationContext).isPrivilegedTransportSetUp()) {
             DaemonKeepAliveService.start(applicationContext)
         }
-        // Foreground sync for click-to-dial: this app has no push
-        // channel (no FCM), so pending handoffs are polled when the
-        // app is opened. When the app is truly in front of the user
-        // (no lock barrier), the oldest pending request opens the
-        // native dialer directly; otherwise every row takes the
-        // notification fallback. Runs off the main thread; the
-        // direct open itself hops back to the UI thread below.
+        // Desktop click-to-dial is delivered over one persistent
+        // WebSocket owned by DialSocketService. There is no polling:
+        // the server pushes new requests and replays pending ones on
+        // reconnect. Starting the service here is idempotent and also
+        // recovers it after an OEM task swipe.
         refreshUnlockedSnapshot()
-        // Keep the closed-app poll schedule in sync with the opt-in.
-        // Idempotent (UPDATE = single periodic worker; disabling
-        // cancels it). WorkManager persists it across reboots.
-        com.baba.callvault.system.storage.DialPollScheduler.apply(applicationContext)
-        Thread({
+        com.baba.callvault.system.storage.DialSocketService.ensureStarted(applicationContext)
+        // Owner policy refresh on foreground: an already-logged-in phone must pick up
+        // Owner changes promptly. Best-effort and throttled (syncIfDue fetches at most
+        // every POLICY_SYNC_INTERVAL_MS per successful sync — independent of the 7-day
+        // recording-validity bound) — no polling, no FCM, no battery drain. Off the main
+        // thread; failures keep the last-known policy, never a silent flip.
+        Thread {
             runCatching {
-                DialSync.checkAndNotify(applicationContext, directOpen = { request ->
-                    openDialerOnUiThread(request.phoneNumber, request.id)
-                })
+                val base = com.baba.callvault.system.storage.WacrmApi.normalizeBaseUrl(
+                    AppPreferences(applicationContext).getWacrmUrl()
+                ) ?: return@runCatching
+                com.baba.callvault.system.storage.WhatsappSourceSync.syncIfDue(applicationContext, base)
             }
-        }, "dial-sync").start()
-    }
-
-    /**
-     * Opens the native dialer for an already-validated poll row, on
-     * the UI thread (DIAL only, prefilled, never placed). Returns
-     * true only when the ACTION_DIAL launch was initiated; any
-     * failure (including a destroyed activity) reports false so the
-     * poller falls back to the notification instead of dropping it.
-     */
-    private fun openDialerOnUiThread(phoneNumber: String, dialId: String): Boolean {
-        if (!DialPhoneValidation.isDialable(phoneNumber)) return false
-        val telUri = DialPhoneValidation.toTelUri(phoneNumber) ?: return false
-        var opened = false
-        val latch = java.util.concurrent.CountDownLatch(1)
-        runOnUiThread {
-            opened = runCatching {
-                if (isDestroyed || isFinishing) return@runCatching false
-                startActivity(Intent(Intent.ACTION_DIAL, android.net.Uri.parse(telUri)))
-                true
-            }.onFailure {
-                com.baba.callvault.utils.AppLogger.w(
-                    "CV:Dial",
-                    "Dial poll: direct open failed (${it.javaClass.simpleName})"
-                )
-            }.getOrDefault(false)
-            latch.countDown()
-        }
-        // Bounded wait: a wedged UI thread must not stall the poller
-        // past the point where the notification fallback helps.
-        latch.await(10, java.util.concurrent.TimeUnit.SECONDS)
-        if (opened) {
-            com.baba.callvault.utils.AppLogger.i(
-                "CV:Dial",
-                "Dial ${com.baba.callvault.system.storage.DialRequests.maskId(dialId)}: dialer opened directly (foreground)"
-            )
-        }
-        return opened
+        }.apply { isDaemon = true; name = "cv-policy-sync" }.start()
     }
 
     /**
      * Whether a direct (prompt-less) dialer open is currently
      * appropriate: the app lock is either off or already satisfied.
-     * Used by the poller so a locked app never flashes a lead's
-     * number onto the dialer; those rows take the notification path
-     * and open only after the explicit tap (post-unlock).
+     * A locked app never flashes a lead's number onto the dialer;
+     * those rows take the notification path and open only after the
+     * explicit tap (post-unlock).
      */
     fun isUnlockedForDial(): Boolean = !AppLock.isEnabled(this) || isUnlocked
 
@@ -447,6 +422,11 @@ class MainActivity : AppCompatActivity() {
          */
         @Volatile
         var unlockedSnapshotForDial = false
+            private set
+
+        /** True between Activity onStart/onStop; lets a socket event choose a plain launch. */
+        @Volatile
+        var isAppForeground = false
             private set
 
         fun isUnlockedForDial(app: android.content.Context): Boolean {
@@ -475,6 +455,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStop() {
         super.onStop()
+        isAppForeground = false
         // Re-lock on the way out, so returning from the recents list asks again — but a rotation is
         // not a way out. Without this guard the recreated Activity's onStart would fire a second
         // biometric prompt before the restored flag above could be of any use.

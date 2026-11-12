@@ -9,17 +9,10 @@
 package com.baba.callvault.ui.screens
 
 import android.provider.Settings
-import android.annotation.SuppressLint
-import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -28,19 +21,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Wifi
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.CallReceived
-import androidx.compose.material.icons.filled.BugReport
-import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.PhoneInTalk
 import androidx.compose.material.icons.filled.Smartphone
-import androidx.compose.material.icons.filled.SystemUpdate
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.ColorLens
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
@@ -53,7 +39,10 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.res.pluralStringResource
@@ -61,86 +50,50 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import android.widget.Toast
-import com.baba.callvault.system.openWirelessDebugging
-import com.baba.callvault.integrations.adb.AdbPairingService
-import com.baba.callvault.system.diagnostics.ReportBundle
-import com.baba.callvault.ui.common.verticalScrollbar
-import com.baba.callvault.ui.common.horizontalScrollbar
-import java.time.LocalDateTime
-import java.io.File
 import com.baba.callvault.services.recording.DaemonKeepAliveService
 import com.baba.callvault.services.recording.VoipCaptureController
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
+import android.text.format.DateUtils
+import com.baba.callvault.ui.common.CvStatusPill
+import com.baba.callvault.ui.common.CvTone
 import androidx.compose.runtime.rememberCoroutineScope
 import com.baba.callvault.R
-import com.baba.callvault.system.PersistentFolderPickerContract
-import com.baba.callvault.system.copyToClipboard
-import com.baba.callvault.system.openOriginalProjectRepo
-import com.baba.callvault.system.diagnostics.SystemLogCollector
-import com.baba.callvault.system.shareLogFiles
-import com.baba.callvault.system.openKofi
 import com.baba.callvault.ui.common.formatByteSize
-import com.baba.callvault.ui.common.SupportDialog
-import com.baba.callvault.system.shareLogFile
-import com.baba.callvault.server.RecorderBackend
 import com.baba.callvault.utils.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.async
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.flow.first
 import androidx.annotation.StringRes
 import com.baba.callvault.data.AppPreferences
 import com.baba.callvault.data.WacrmSession
 import com.baba.callvault.system.storage.WacrmAuth
-import com.baba.callvault.system.AppLock
 import com.baba.callvault.data.ModeCapability
-import com.baba.callvault.integrations.adb.AdbShell
-import com.baba.callvault.integrations.adb.UsbDebuggingOff
-import com.baba.callvault.integrations.adb.UsbDebuggingOffGuard
-import com.baba.callvault.integrations.adb.UsbDefaultConfig
-import com.baba.callvault.integrations.adb.UsbDefaultMode
-import com.baba.callvault.integrations.adb.UsbSetResult
-import com.baba.callvault.integrations.adb.UsbDebuggingState
-import com.baba.callvault.integrations.adb.WifiState
-import com.baba.callvault.data.RetentionPeriod
-import com.baba.callvault.integrations.scrcpy.AUDIO_BIT_RATE_OPTIONS
 import com.baba.callvault.data.SyncScheduleMode
 import com.baba.callvault.data.TranscriptionMode
-import com.baba.callvault.transcription.TranscriptionQueue
 import com.baba.callvault.summary.SummaryModel
 import com.baba.callvault.transcription.model.TranscriptionModel
-import com.baba.callvault.ui.common.SyncScheduleLabels
 import com.baba.callvault.ui.common.TranscriptionLabels
-import com.baba.callvault.ui.common.TranscriptionTimeDialog
-import com.baba.callvault.ui.common.formatRunTime
 import com.baba.callvault.data.StorageTarget
-import com.baba.callvault.integrations.scrcpy.RECOMMENDED_AUDIO_BIT_RATE
-import com.baba.callvault.integrations.scrcpy.ScrcpyAudioCodec
-import com.baba.callvault.integrations.scrcpy.ScrcpyAudioSource
-import com.baba.callvault.integrations.scrcpy.ScrcpyConfig
-import com.baba.callvault.system.storage.SafHelper
 import com.baba.callvault.system.storage.WacrmApi
+import com.baba.callvault.system.storage.DialSocketClient
+import com.baba.callvault.system.storage.WacrmDeviceAuth
+import com.baba.callvault.system.storage.WacrmSessionState
 import com.baba.callvault.system.storage.WhatsappSourceSync
-import com.baba.callvault.system.takePersistableFolderPermission
+import com.baba.callvault.system.storage.PolicyRefreshLoop
+import com.baba.callvault.integrations.adb.AdbShell
+import com.baba.callvault.system.openDeveloperSettings
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.baba.callvault.ui.common.ContactSelectionDialog
 import com.baba.callvault.ui.common.CvCard
 import com.baba.callvault.ui.common.OemGateNotice
-import com.baba.callvault.ui.common.CvDestructiveButton
-import com.baba.callvault.ui.common.CvPrimaryButton
 import com.baba.callvault.ui.common.CvScaffold
-import com.baba.callvault.ui.common.CvSecondaryButton
 import com.baba.callvault.ui.common.CvSectionHeader
-import com.baba.callvault.ui.common.FileNameFormatDialog
 import com.baba.callvault.ui.common.M3DropdownField
 import com.baba.callvault.ui.common.OptionItem
 import com.baba.callvault.ui.viewmodels.ContactPickerType
@@ -148,50 +101,23 @@ import com.baba.callvault.ui.viewmodels.ContactPickerViewModel
 import com.baba.callvault.ui.viewmodels.SettingsActions
 import com.baba.callvault.ui.viewmodels.SettingsViewModel
 import com.baba.callvault.ui.viewmodels.ContactPickerState
-import com.baba.callvault.utils.fileNameTemplateExample
-import com.baba.callvault.utils.presetForTemplateOrFirst
-import com.mikepenz.aboutlibraries.ui.compose.m3.LibrariesContainer
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
-import com.mikepenz.aboutlibraries.ui.compose.android.produceLibraries
-import android.net.Uri
-import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.SimCard
 import androidx.compose.material3.RadioButton
 import androidx.compose.material.icons.filled.BatteryChargingFull
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.Translate
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Gavel
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.NotificationsActive
-import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Usb
-import androidx.compose.material.icons.filled.Vibration
 import androidx.compose.material.icons.filled.WifiOff
 import com.baba.callvault.ui.common.OfflineDialogMode
 import com.baba.callvault.ui.common.OfflineRecordingDialog
-import com.baba.callvault.system.storage.MinDurationPolicy
-import com.baba.callvault.system.storage.StorageCapPolicy
 import com.baba.callvault.data.voip.VoipAppPolicy
 import com.baba.callvault.data.voip.WhatsappCallPolicy
 import com.baba.callvault.data.voip.WhatsappRecordingSource
 import com.baba.callvault.services.call.SimInfo
 import com.baba.callvault.services.call.PhoneNumberResolver
 import com.baba.callvault.services.call.SimSubscriptions
-import androidx.compose.ui.platform.LocalInspectionMode
-import androidx.compose.ui.platform.LocalResources
-import org.xmlpull.v1.XmlPullParser
-import java.util.Locale
 
 /**
  * Stateful wrapper for the Settings screen that connects [SettingsViewModel] to [SettingsContent].
@@ -207,87 +133,6 @@ fun SettingsScreen(
     onBack: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
-    // Shown while the debug report is being built. Building it makes several ADB round-trips, and on
-    // a phone with a flaky transport that is slow — during which the old code showed NOTHING, so the
-    // button read as broken, people tapped again, and leaving the screen cancelled the whole thing
-    // (the scope above is the composable's). Field-reported by a tester on 2026-09-03 as "the share
-    // debug function doesn't work", reproduced as "works only on the second visit".
-    var preparingReport by remember { mutableStateOf(false) }
-
-
-    /**
-     * Builds the app's debug report and, within [SYSTEM_REPORT_BUDGET_MS], the system report. Shared by Share and
-     * Save, so both hand over exactly the same thing. The first file is null only when there is nothing to report; the
-     * second when the system half could not be collected in time.
-     */
-    suspend fun buildReports(): Pair<File?, File?> {
-        val report = withContext(Dispatchers.IO) { AppLogger.buildShareableReport(context) }
-        // The system slice carries the daemon's lines and the platform's — the half no bug
-        // report has ever contained. Null when logcat gave nothing usable, in which case the
-        // app's own report still goes on its own.
-        //
-        // BOUNDED, and that is the whole point. It makes up to seven ADB round-trips, each
-        // retrying with a forced reconnect, so on a phone whose transport is unhealthy it
-        // can outlast any patience. Unbounded, a hang here threw away the app report too —
-        // which was already built and sitting in the variable above — and the user got
-        // nothing at all. Now the optional half can fail and the report still goes out.
-        //
-        // Run on a scope of its own and time out the AWAIT, not the work. buildReport is
-        // one long blocking block inside withContext(Dispatchers.IO) with no suspension
-        // points, and coroutine cancellation is cooperative — a timeout wrapped straight
-        // around it cannot interrupt a blocked socket read, so it would look like a bound
-        // and be none. await() IS a suspension point, so this returns on time and abandons
-        // the stuck thread instead of waiting for it. A detached scope keeps that
-        // abandoned job from holding up this coroutine's completion as a child would.
-        val collector = CoroutineScope(Dispatchers.IO)
-        val pending = collector.async { SystemLogCollector.buildReport(context) }
-        val systemReport = withTimeoutOrNull(SYSTEM_REPORT_BUDGET_MS) { pending.await() }
-        if (systemReport == null) {
-            collector.cancel()
-            AppLogger.w(
-                "CV:Settings",
-                "System report not attached (empty or over ${SYSTEM_REPORT_BUDGET_MS}ms); " +
-                    "going on with the app report alone"
-            )
-        }
-        return report to systemReport
-    }
-
-    // Save as. The reports live in the app's private cache, where no file manager can see them and `adb pull` cannot
-    // reach them on a release build, so Share was the only way out — and a user who will not send logs through email
-    // or a messenger could not get them at all (mirror176, #28 and #29). Android's own save dialog lets them pick the
-    // folder and the name, and needs no storage permission. Both reports go into the one file it creates.
-    val saveReportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
-        if (uri == null || preparingReport) return@rememberLauncherForActivityResult
-        scope.launch {
-            preparingReport = true
-            try {
-                val (report, systemReport) = buildReports()
-                if (report == null) {
-                    Toast.makeText(context, R.string.settings_bugreport_share_empty, Toast.LENGTH_LONG).show()
-                    return@launch
-                }
-                val saved = withContext(Dispatchers.IO) {
-                    runCatching {
-                        val bundle = ReportBundle.combine(report.readText(), systemReport?.readText())
-                        context.contentResolver.openOutputStream(uri, "wt")?.use { it.write(bundle.toByteArray()) } != null
-                    }.onFailure { AppLogger.w("CV:Settings", "Saving the report failed: ${it.message}") }
-                        .getOrDefault(false)
-                }
-                Toast.makeText(
-                    context,
-                    if (saved) R.string.settings_bugreport_saved else R.string.settings_bugreport_save_failed,
-                    Toast.LENGTH_LONG,
-                ).show()
-            } finally {
-                preparingReport = false
-            }
-        }
-    }
-
     // Trigger recomposition when settings change by viewmodel.refresh()
     val updateTrigger by viewModel.updateTrigger.collectAsState()
 
@@ -295,78 +140,12 @@ fun SettingsScreen(
     val contactPickerViewModel: ContactPickerViewModel = viewModel()
     val contactPickerState by contactPickerViewModel.contactPickerState.collectAsState()
 
-    // Folder picker — PersistentFolderPickerContract keeps access alive after a reboot.
-    val folderPickerLauncher = rememberLauncherForActivityResult(PersistentFolderPickerContract()) { uri ->
-        if (uri != null) {
-            if (SafHelper.isCloudFolder(uri)) {
-                // Cloud folders (Google Drive, …) reject "rw" and report length asynchronously, which
-                // breaks live capture. Refuse it here; the Drive backup option handles cloud copies.
-                Toast.makeText(context, context.getString(R.string.folder_cloud_rejected), Toast.LENGTH_LONG).show()
-            } else {
-                context.takePersistableFolderPermission(uri)
-                viewModel.preferences.setRecordingFolderUri(uri)
-            }
-        }
-        viewModel.refresh()
-    }
-
-    // Drive folder picker — same contract; persists READ + WRITE access across reboots.
-    val driveFolderPickerLauncher = rememberLauncherForActivityResult(PersistentFolderPickerContract()) { uri ->
-        if (uri != null) {
-            context.takePersistableFolderPermission(uri)
-            viewModel.setDriveFolderUri(uri)
-        }
-        viewModel.refresh()
-    }
-
-    // Export settings to a JSON file the user names — the system save dialog picks place + name, no
-    // permission needed. Only device-independent preferences are written (see AppPreferences.EXPORTABLE_KEYS).
-    val exportSettingsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            val saved = withContext(Dispatchers.IO) {
-                runCatching {
-                    context.contentResolver.openOutputStream(uri, "wt")
-                        ?.use { it.write(viewModel.exportSettingsJson().toByteArray()) } != null
-                }.onFailure { AppLogger.w("CV:Settings", "Settings export failed: ${it.message}") }
-                    .getOrDefault(false)
-            }
-            Toast.makeText(
-                context,
-                if (saved) R.string.settings_export_done else R.string.settings_export_failed,
-                Toast.LENGTH_LONG,
-            ).show()
-        }
-    }
-
-    // Import settings: pick a JSON file, read it, then confirm before overwriting.
-    var pendingImportJson by remember { mutableStateOf<String?>(null) }
-    val importSettingsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            val text = withContext(Dispatchers.IO) {
-                runCatching { context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } }
-                    .getOrNull()
-            }
-            if (text.isNullOrBlank()) {
-                Toast.makeText(context, R.string.settings_import_failed, Toast.LENGTH_LONG).show()
-            } else {
-                pendingImportJson = text
-            }
-        }
-    }
-
     SettingsContent(
         preferences = viewModel.preferences,
         updateTrigger = updateTrigger,
         actions = viewModel,
         contactPickerState = contactPickerState,
         onBack = onBack,
-        // Seed each picker with its OWN current folder so it opens there, instead of letting
-        // Android's DocumentsUI reopen at the last-browsed location (which, after setting Drive,
-        // made re-picking the local folder open at the Drive path).
-        onSelectFolder = { folderPickerLauncher.launch(viewModel.preferences.getRecordingFolderUri()) },
-        onSelectDriveFolder = { driveFolderPickerLauncher.launch(viewModel.preferences.getDriveFolderUri()) },
         onOpenContactsIncoming = { contactPickerViewModel.openContactPicker(ContactPickerType.INCOMING) },
         onOpenContactsOutgoing = { contactPickerViewModel.openContactPicker(ContactPickerType.OUTGOING) },
         onConfirmContacts = { numbers ->
@@ -375,78 +154,8 @@ fun SettingsScreen(
             viewModel.refresh()
         },
         onDismissContacts = { contactPickerViewModel.dismissContactPicker() },
-        // Build the report off the main thread, then hand it to the system share-sheet. The Share
-        // entry point is only shown when a valid log file exists, so the null branch is a safety net.
-        onShareLogs = {
-            if (!preparingReport) scope.launch {
-                preparingReport = true
-                try {
-                    val (report, systemReport) = buildReports()
-                    if (report != null) {
-                        context.shareLogFiles(listOfNotNull(report, systemReport))
-                    } else {
-                        Toast.makeText(context, R.string.settings_bugreport_share_empty, Toast.LENGTH_LONG).show()
-                    }
-                } finally {
-                    preparingReport = false
-                }
-            }
-        },
-        // The save dialog opens first, named with the date and time; the report is built once a place is chosen.
-        onSaveLogs = {
-            if (!preparingReport) {
-                val now = LocalDateTime.now()
-                saveReportLauncher.launch(
-                    ReportBundle.suggestedFileName(now.year, now.monthValue, now.dayOfMonth, now.hour, now.minute)
-                )
-            }
-        },
-        onExportSettings = { exportSettingsLauncher.launch("CallVault-settings-${java.time.LocalDate.now()}.json") },
-        onImportSettings = { importSettingsLauncher.launch(arrayOf("application/json", "text/*")) },
         modifier = modifier
     )
-
-    // Modal on purpose: it gives the tap an immediate answer, and it stops a second tap or a walk
-    // back to the previous screen from cancelling work that is already under way.
-    if (preparingReport) {
-        AlertDialog(
-            onDismissRequest = { },
-            confirmButton = {},
-            text = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(16.dp))
-                    Text(stringResource(R.string.settings_bugreport_preparing))
-                }
-            },
-        )
-    }
-
-    // Confirm before overwriting the current settings with an imported file.
-    pendingImportJson?.let { json ->
-        AlertDialog(
-            onDismissRequest = { pendingImportJson = null },
-            title = { Text(stringResource(R.string.settings_import_confirm_title)) },
-            text = { Text(stringResource(R.string.settings_import_confirm_text)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingImportJson = null
-                    val applied = viewModel.importSettings(json)
-                    Toast.makeText(
-                        context,
-                        if (applied >= 0) context.getString(R.string.settings_import_done, applied)
-                        else context.getString(R.string.settings_import_failed),
-                        Toast.LENGTH_LONG,
-                    ).show()
-                }) { Text(stringResource(R.string.settings_import_confirm_apply)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingImportJson = null }) {
-                    Text(stringResource(R.string.general_cancel))
-                }
-            },
-        )
-    }
 }
 
 /**
@@ -461,46 +170,12 @@ fun SettingsScreen(
  * @param actions                Implementation of [SettingsActions] to handle user interaction.
  * @param contactPickerState     Current state of the contact picker dialog.
  * @param onBack                 Called when the user taps the top-bar back affordance.
- * @param onSelectFolder         Called when the user taps the recording-folder row.
- * @param onSelectDriveFolder    Called when the user taps the Drive-folder row; opens the SAF picker.
  * @param onOpenContactsIncoming Called to open picker for incoming contacts.
  * @param onOpenContactsOutgoing Called to open picker for outgoing contacts.
  * @param onConfirmContacts      Called when contacts are confirmed from the dialog.
  * @param onDismissContacts      Called when we want to close the dialog without confirmation/saving.
- * @param onShareLogs            Called to share diagnostic logs via the system share-sheet (Debug section).
- * @param onSaveLogs             Called to save diagnostic logs to a file the user picks (Debug section).
  * @param modifier               Optional size/position modifier.
  */
-/** Hard ceiling on the optional system-log half of a debug report. See the share handler. */
-private const val SYSTEM_REPORT_BUDGET_MS = 45_000L
-
-/**
- * Back up or restore settings — a section-less row at the very bottom of Settings. Export writes a JSON
- * file of your device-independent preferences; Import reads one back (after a confirm).
- */
-@Composable
-private fun ExportImportRow(onExport: () -> Unit, onImport: () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            text = stringResource(R.string.settings_backup_title),
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Text(
-            text = stringResource(R.string.settings_backup_desc),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(onClick = onExport, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.settings_export))
-            }
-            OutlinedButton(onClick = onImport, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.settings_import))
-            }
-        }
-    }
-}
-
 @Composable
 fun SettingsContent(
     preferences: AppPreferences,
@@ -508,32 +183,24 @@ fun SettingsContent(
     actions: SettingsActions,
     contactPickerState: ContactPickerState?,
     onBack: () -> Unit,
-    onSelectFolder: () -> Unit,
-    onSelectDriveFolder: () -> Unit,
     onOpenContactsIncoming: () -> Unit,
     onOpenContactsOutgoing: () -> Unit,
     onConfirmContacts: (Set<String>) -> Unit,
     onDismissContacts: () -> Unit,
-    onShareLogs: () -> Unit,
-    onSaveLogs: () -> Unit,
-    onExportSettings: () -> Unit,
-    onImportSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var showLicensesDialog by remember { mutableStateOf(false) }
 
     // Accordion: at most one section open at a time; Recording & storage is open on entry. State is
     // hoisted here (above the LazyColumn) so it is shared across all sections. Tapping the open section
     // closes it (null = none open); tapping any other section opens it and closes the previous one.
     // Everything closed on entry: the panel then opens on a short list of section names, which is
-    // navigable at a glance. Auto-opening one buried the other five under a screenful of its rows.
+    // navigable at a glance. Auto-opening one buried the others under a screenful of its rows.
     var openSection by rememberSaveable { mutableStateOf<String?>(null) }
     val onToggleSection: (String) -> Unit = { id -> openSection = if (openSection == id) null else id }
 
     CvScaffold(
         modifier = modifier.fillMaxSize(),
         title = stringResource(R.string.general_settings),
-        subtitle = stringResource(R.string.settings_ui_subtitle),
         onBack = onBack
     ) { innerPadding ->
         LazyColumn(
@@ -549,14 +216,6 @@ fun SettingsContent(
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             item {
-                // Above every section and outside all of them, so it is the first thing on the screen.
-                //
-                // It decides which of two completely different recording engines runs — and therefore
-                // which features exist at all — so burying it three taps down under GENERAL >
-                // Privileges made the single most consequential setting the hardest one to find. It is
-                // also the first thing worth checking when something is not working, which is exactly
-                // when nobody wants to go hunting for it.
-                PrivilegedModeSubSection()
                 // The wizard cannot be re-run, so a phone whose OEM blocks the grant needs to be able to
                 // find this out here too. Self-hiding when it does not apply.
                 OemGateNotice(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
@@ -573,135 +232,22 @@ fun SettingsContent(
                 )
             }
             item {
-                StorageSection(
+                WacrmUploadSection(
                     preferences = preferences,
                     updateTrigger = updateTrigger,
-                    actions = actions,
-                    // SECTION_RETENTION also opens Storage: retention used to be its own accordion, and a
-                    // user whose saved open-section is the old key should land on the section that now
-                    // contains it rather than on a collapsed screen.
-                    expanded = openSection == SECTION_STORAGE || openSection == SECTION_RETENTION,
-                    onToggle = { onToggleSection(SECTION_STORAGE) },
-                    onSelectFolder = onSelectFolder,
-                    onSelectDriveFolder = onSelectDriveFolder
+                    expanded = openSection == SECTION_WACRM,
+                    onToggle = { onToggleSection(SECTION_WACRM) },
                 )
             }
             item {
-                AudioSection(
-                    preferences, updateTrigger, actions,
-                    expanded = openSection == SECTION_AUDIO,
-                    onToggle = { onToggleSection(SECTION_AUDIO) }
-                )
-            }
-            item {
-                // Summaries live inside this section rather than beside it. A summary is read from
-                // a transcript and is useless without one, and — the reason this moved — they used
-                // to have a language setting each. Setting the wrong one produced a transcript in
-                // the wrong language with no hint as to why, which is exactly what happened.
-                TranscriptionSection(
-                    preferences, updateTrigger, actions,
-                    expanded = openSection == SECTION_TRANSCRIPTION,
-                    onToggle = { onToggleSection(SECTION_TRANSCRIPTION) },
-                    summaryRows = {
-                        SummaryRows(
-                            updateTrigger = updateTrigger,
-                            onDownload = { actions.downloadSummaryModel(it) },
-                            onCancel = { actions.cancelSummaryModelDownload(it) },
-                            onDelete = { actions.deleteSummaryModel(it) }
-                        ) {
-                            // Settings-only, and passed in rather than living in SummaryRows because
-                            // the wizard renders those same rows and has no business offering a
-                            // preference about a dialog it is showing for the first time.
-                            //
-                            // Its home is here so the dialog's "don't show this again" can be undone
-                            // — a dialog that can permanently remove itself with no way back would be
-                            // a trap. Same reasoning as the transcription confirmation switch above.
-                            val askFirst = remember(updateTrigger) {
-                                preferences.getSummaryConfirmRequirements()
-                            }
-                            SettingsToggleRow(
-                                icon = Icons.Filled.Info,
-                                label = stringResource(R.string.summary_requirements_heading),
-                                description = stringResource(R.string.summary_requirements_toggle_description),
-                                checked = askFirst,
-                                onCheckedChange = {
-                                    preferences.setSummaryConfirmRequirements(it)
-                                    actions.refreshSettings()
-                                }
-                            )
-                        }
-                    }
-                )
-            }
-            item {
-                GeneralSection(
-                    preferences = preferences,
+                DialerSection(
                     updateTrigger = updateTrigger,
-                    actions = actions,
-                    // Old keys still open General, so a user whose saved section was Visual,
-                    // Experimental or Updates lands on the section that now contains it.
-                    expanded = openSection in setOf(SECTION_GENERAL, SECTION_VISUAL, SECTION_EXPERIMENTAL, SECTION_UPDATES),
-                    onToggle = { onToggleSection(SECTION_GENERAL) }
+                    expanded = openSection == SECTION_DIALER,
+                    onToggle = { onToggleSection(SECTION_DIALER) },
+                    onOpenLogin = { openSection = SECTION_WACRM },
                 )
             }
-            // Debug section: always visible so anyone can enable logging and share logs to report an issue.
-            item {
-                BugReportSection(
-                    preferences, updateTrigger, actions, onShareLogs, onSaveLogs,
-                    expanded = openSection == SECTION_BUG_REPORT,
-                    onToggle = { onToggleSection(SECTION_BUG_REPORT) }
-                )
-            }
-            // About moved to the bottom; the fork attribution stays visible (GPLv3 §7 requirement).
-            item {
-                AboutSection(
-                    versionString = actions.getAppVersion(),
-                    onShowLicenses = { showLicensesDialog = true },
-                    expanded = openSection == SECTION_ABOUT,
-                    onToggle = { onToggleSection(SECTION_ABOUT) }
-                )
-            }
-            // Section-less, at the very bottom: back up or restore your settings.
-            item {
-                ExportImportRow(onExport = onExportSettings, onImport = onImportSettings)
-            }
-        }
-    }
-
-    if (showLicensesDialog) {
-        Dialog(
-            onDismissRequest = { showLicensesDialog = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
-        ) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(16.dp),
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.surface
-            ) {
-                Column {
-                    Text(
-                        text = stringResource(R.string.general_licenses),
-                        style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.padding(16.dp)
-                    )
-
-                    val libraries by produceLibraries(R.raw.aboutlibraries)
-                    LibrariesContainer(libraries,Modifier
-                        .fillMaxSize()
-                        .weight(1f),
-                        showAuthor = true, showLicenseBadges = true, showFundingBadges = false, showVersion = true, showDescription = true)
-                    TextButton(
-                        onClick = { showLicensesDialog = false },
-                        modifier = Modifier
-                            .align(Alignment.End)
-                            .padding(8.dp)
-                    ) {
-                        Text(stringResource(R.string.general_close))
-                    }
-                }
-            }
+            // End of the settings list: Recording, Login and Dialer.
         }
     }
 
@@ -727,45 +273,29 @@ fun SettingsContent(
 // Settings accordion: stable keys identifying each section. At most one section is open at a time;
 // [SECTION_RECORDING] is the one open when Settings is first entered.
 private const val SECTION_RECORDING = "recording"
-private const val SECTION_STORAGE = "storage"
-private const val SECTION_RETENTION = "retention"
-private const val SECTION_AUDIO = "audio"
-private const val SECTION_TRANSCRIPTION = "transcription"
-private const val SECTION_GENERAL = "general"
+private const val SECTION_WACRM = "wacrm"
+private const val SECTION_DIALER = "dialer"
 
 // Sub-section keys. Scoped to their parent section, so the same value can never collide across two.
-private const val SUB_FILE_NAME = "sub_file_name"
 private const val SUB_PHONE_CALLS = "sub_phone_calls"
 private const val SUB_WHATSAPP_SOURCE = "sub_whatsapp_source"
 private const val SUB_INCOMING = "sub_incoming"
 private const val SUB_OUTGOING = "sub_outgoing"
-private const val SUB_WHERE = "sub_where"
-private const val SUB_UPLOAD = "sub_upload"
-private const val SUB_WACRM = "sub_wacrm"
-private const val SUB_RETENTION = "sub_retention"
-private const val SUB_VISUAL = "sub_visual"
-private const val SUB_PRIVACY = "sub_privacy"
-private const val SUB_EXPERIMENTAL = "sub_experimental"
-private const val SUB_UPDATES = "sub_updates"
 private const val SUB_PRIVILEGES = "privileges"
-private const val SECTION_VISUAL = "visual"
-private const val SECTION_EXPERIMENTAL = "reliability"   // key kept so a user's open-section state survives the rename
-private const val SECTION_BUG_REPORT = "bug_report"
-private const val SECTION_UPDATES = "updates"
-private const val SECTION_ABOUT = "about"
 
 // ── Settings sections ──────────────────────────────────────────────────────────────────────
 
-/** Recording behaviour: filename template, plus auto-record incoming/outgoing with their
- * per-direction ignore filters. (Where files are saved lives in [StorageSection].)
+/** Read-only Owner recording policy: the Owner's assigned number, phone status and
+ * WhatsApp selection, synced from WhatsApp Max. No switches, pickers or dialogs —
+ * the salesperson cannot change any of it here. Management happens in WhatsApp Max.
  *
  * @param preferences            The [AppPreferences] instance to read data from.
  * @param updateTrigger          Trigger value to force recomposition when settings change.
- * @param actions                Implementation of [SettingsActions] to handle user interaction.
+ * @param actions                Unused (kept for call-site compatibility).
  * @param expanded               Whether this accordion section is open.
  * @param onToggle               Invoked when the section header is tapped.
- * @param onOpenContactsIncoming Called when the user wants to pick incoming contacts to ignore.
- * @param onOpenContactsOutgoing Called when the user wants to pick outgoing contacts to ignore.
+ * @param onOpenContactsIncoming Unused (kept for call-site compatibility).
+ * @param onOpenContactsOutgoing Unused (kept for call-site compatibility).
  */
 @Composable
 private fun RecordingSection(
@@ -777,331 +307,108 @@ private fun RecordingSection(
     onOpenContactsIncoming: () -> Unit,
     onOpenContactsOutgoing: () -> Unit
 ) {
-    // Evaluate these here so they are fetched on every recomposition.
-    val fileNameFormat = remember(updateTrigger) { preferences.getFileNameTemplate() }
-    val carrierRecording = remember(updateTrigger) { preferences.isCarrierRecordingEnabled() }
-    val autoRecordIncoming = remember(updateTrigger) { preferences.isAutoRecordIncomingEnabled() }
-    val autoRecordOutgoing = remember(updateTrigger) { preferences.isAutoRecordOutgoingEnabled() }
-    val recordFromAnswer = remember(updateTrigger) { preferences.isRecordFromAnswerEnabled() }
-    val ignoreAnonymousIncoming = remember(updateTrigger) { preferences.isIgnoreAnonymousIncomingEnabled() }
-    val ignoreCrossCountryIncoming = remember(updateTrigger) { preferences.isIgnoreCrossCountryIncomingEnabled() }
-    val ignoreContactsModeIncoming = remember(updateTrigger) { preferences.getIgnoreContactsModeIncoming() }
-    val ignoreContactsModeOutgoing = remember(updateTrigger) { preferences.getIgnoreContactsModeOutgoing() }
-    val ignoreCrossCountryOutgoing = remember(updateTrigger) { preferences.isIgnoreCrossCountryOutgoingEnabled() }
-    // The count on the "Select contacts" button belongs to whichever list the chosen mode uses.
-    val ignoredContactsIncomingCount = remember(updateTrigger, ignoreContactsModeIncoming) {
-        if (ignoreContactsModeIncoming == AppPreferences.IgnoreContactsMode.ONLY_SELECTED) preferences.getRecordOnlyContactsIncoming().size
-        else preferences.getIgnoredContactsIncoming().size
+    // Bounded foreground refresh while this section is open: fetch on expand,
+    // then about once a minute while expanded and foregrounded. Collapsing the
+    // section, leaving the screen, or backgrounding the app cancels the loop
+    // (LaunchedEffect scope) — no polling exists outside this UI scope.
+    // The fetch itself is throttled (at most one request per
+    // POLICY_SYNC_INTERVAL_MS per success) and single-flight, so a resume
+    // racing an expand still issues exactly one request.
+    val context = LocalContext.current
+    val app = context.applicationContext
+    val baseUrl = WacrmApi.normalizeBaseUrl(preferences.getWacrmUrl())
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var resumed by remember { mutableStateOf(true) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) resumed = true
+            else if (event == Lifecycle.Event.ON_PAUSE) resumed = false
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    val ignoredContactsOutgoingCount = remember(updateTrigger, ignoreContactsModeOutgoing) {
-        if (ignoreContactsModeOutgoing == AppPreferences.IgnoreContactsMode.ONLY_SELECTED) preferences.getRecordOnlyContactsOutgoing().size
-        else preferences.getIgnoredContactsOutgoing().size
+    val refreshLoop = remember(baseUrl) {
+        PolicyRefreshLoop {
+            if (baseUrl != null) {
+                withContext(Dispatchers.IO) {
+                    WhatsappSourceSync.syncIfDue(app, baseUrl)
+                }
+            }
+        }
     }
-
-    var showFileNameFormatDialog by remember { mutableStateOf(false) }
-
-    // One open sub-section at a time, within this section only, and nothing open on entry.
-    var openSub by rememberSaveable { mutableStateOf<String?>(null) }
-
+    LaunchedEffect(expanded, resumed) {
+        if (!expanded || !resumed || baseUrl == null) return@LaunchedEffect
+        refreshLoop.runForever()
+    }
     SettingsSection(
-        title = stringResource(R.string.settings_section_recording),
+        title = stringResource(R.string.settings_recording_configuration),
         expanded = expanded,
         onToggle = onToggle,
         wrapInCard = false,
     ) {
-      SettingsSubSection(
-        title = stringResource(R.string.settings_file_name_template),
-        expanded = openSub == SUB_FILE_NAME,
-        onToggle = { openSub = if (openSub == SUB_FILE_NAME) null else SUB_FILE_NAME },
-      ) {
-        NavigationRow(
-            icon = Icons.Filled.DriveFileRenameOutline,
-            label = stringResource(R.string.settings_file_name_template),
-            value = stringResource(presetForTemplateOrFirst(fileNameFormat).labelRes),
-            supporting = stringResource(
-                R.string.settings_file_name_template_example,
-                fileNameTemplateExample(fileNameFormat)
-            ),
-            onClick = { showFileNameFormatDialog = true }
-        )
-      }
-
-      // The master switch for phone calls, in its own sub-section above the per-direction ones it
-      // governs. Turning the two direction switches off is NOT the same thing: that is "ask me", and
-      // it still puts a Record prompt on every call. This is the "app calls only" mode.
-      SettingsSubSection(
-        title = stringResource(R.string.settings_subsection_phone_calls),
-        expanded = openSub == SUB_PHONE_CALLS,
-        onToggle = { openSub = if (openSub == SUB_PHONE_CALLS) null else SUB_PHONE_CALLS },
-      ) {
-        SettingsToggleRow(
-            icon = Icons.Filled.Smartphone,
-            label = stringResource(R.string.settings_carrier_recording),
-            description = stringResource(R.string.settings_carrier_recording_description),
-            checked = carrierRecording,
-            onCheckedChange = { actions.setCarrierRecording(it) }
-        )
-        // Read-only: which SIM the owner allows is server policy, not a local pick.
         PhonePolicyStatus(preferences = preferences, updateTrigger = updateTrigger)
-      }
-
-      AnimatedVisibility(
-          visible = carrierRecording,
-          enter   = fadeIn() +  expandVertically(),
-          exit    = fadeOut() + shrinkVertically()
-      ) {
-        Column {
-      SettingsSubSection(
-        title = stringResource(R.string.settings_subsection_incoming),
-        expanded = openSub == SUB_INCOMING,
-        onToggle = { openSub = if (openSub == SUB_INCOMING) null else SUB_INCOMING },
-      ) {
-        SettingsToggleRow(
-            icon = Icons.AutoMirrored.Filled.CallReceived,
-            label = stringResource(R.string.settings_auto_record_incoming),
-            checked = autoRecordIncoming,
-            onCheckedChange = { actions.setAutoRecordIncoming(it) }
-        )
-        AnimatedVisibility(
-            visible = autoRecordIncoming,
-            enter   = fadeIn() +  expandVertically(),
-            exit    = fadeOut() + shrinkVertically()
-        ) {
-            NestedGroup {
-                SettingsToggleRow(
-                    label           = stringResource(R.string.settings_ignore_anonymous_incoming),
-                    checked         = ignoreAnonymousIncoming,
-                    onCheckedChange = { actions.setIgnoreAnonymousIncoming(it) }
-                )
-                SettingsToggleRow(
-                    label           = stringResource(R.string.settings_ignore_cross_country_incoming),
-                    checked         = ignoreCrossCountryIncoming,
-                    onCheckedChange = { actions.setIgnoreCrossCountryIncoming(it) },
-                    enabled         = ignoreAnonymousIncoming
-                )
-                IgnoreContactsOptions(
-                    label           = stringResource(R.string.settings_ignore_contacts_incoming),
-                    selectedEnum     = ignoreContactsModeIncoming,
-                    selectedCount    = ignoredContactsIncomingCount,
-                    onSelected      = { actions.setIgnoreContactsModeIncoming(it) },
-                    onSelectContacts = onOpenContactsIncoming
-                )
-            }
-        }
-      }
-
-      SettingsSubSection(
-        title = stringResource(R.string.settings_subsection_outgoing),
-        expanded = openSub == SUB_OUTGOING,
-        onToggle = { openSub = if (openSub == SUB_OUTGOING) null else SUB_OUTGOING },
-      ) {
-        SettingsToggleRow(
-            icon = Icons.AutoMirrored.Filled.CallMade,
-            label = stringResource(R.string.settings_auto_record_outgoing),
-            checked = autoRecordOutgoing,
-            onCheckedChange = { actions.setAutoRecordOutgoing(it) }
-        )
-        // Phone calls only: an app call has no answer signal to wait for (AnswerWait). Not nested
-        // under the automatic switch because a call started from the Record prompt is already past
-        // the dial by the time the button is pressed — this only ever changes an automatic start.
-        SettingsToggleRow(
-            icon = Icons.Filled.PhoneInTalk,
-            label = stringResource(R.string.settings_record_from_answer),
-            description = stringResource(R.string.settings_record_from_answer_description),
-            checked = recordFromAnswer,
-            onCheckedChange = { actions.setRecordFromAnswer(it) }
-        )
-        AnimatedVisibility(
-            visible = autoRecordOutgoing,
-            enter   = fadeIn() +  expandVertically(),
-            exit    = fadeOut() + shrinkVertically()
-        ) {
-            NestedGroup {
-                SettingsToggleRow(
-                    label           = stringResource(R.string.settings_ignore_cross_country_outgoing),
-                    checked         = ignoreCrossCountryOutgoing,
-                    onCheckedChange = { actions.setIgnoreCrossCountryOutgoing(it) }
-                )
-                IgnoreContactsOptions(
-                    label           = stringResource(R.string.settings_ignore_contacts_outgoing),
-                    selectedEnum     = ignoreContactsModeOutgoing,
-                    selectedCount    = ignoredContactsOutgoingCount,
-                    onSelected      = { actions.setIgnoreContactsModeOutgoing(it) },
-                    onSelectContacts = onOpenContactsOutgoing
-                )
-            }
-        }
-      }
-        }
-      }
-    }
-
-      // WhatsApp recording sits outside the phone-call visibility gate above on purpose:
-      // it is an app call governed by the owner-synced source, not by the carrier master
-      // switch. Exactly one app (or neither) records — the gate in VoipRecordingCoordinator
-      // enforces the stored source before creating anything. Read-only: no local control.
-      SettingsSubSection(
-        title = stringResource(R.string.settings_subsection_whatsapp_recording),
-        expanded = openSub == SUB_WHATSAPP_SOURCE,
-        onToggle = { openSub = if (openSub == SUB_WHATSAPP_SOURCE) null else SUB_WHATSAPP_SOURCE },
-      ) {
         WhatsappSourceStatus(
             prefs = preferences,
             updateTrigger = updateTrigger,
         )
-      }
-
-    if (showFileNameFormatDialog) {
-        FileNameFormatDialog(
-            initialFormat = fileNameFormat,
-            onConfirm = { format ->
-                actions.setFileNameTemplate(format)
-                showFileNameFormatDialog = false
-            },
-            onDismiss = { showFileNameFormatDialog = false }
-        )
-    }
-}
-
-/** Storage destinations: where recordings are saved — the storage target (device / Drive / both),
- * the on-device folder, and the Drive folder. (Recording behaviour lives in [RecordingSection].)
- *
- * @param preferences         The [AppPreferences] instance to read data from.
- * @param updateTrigger       Trigger value to force recomposition when settings change.
- * @param actions             Implementation of [SettingsActions] to handle user interaction.
- * @param expanded            Whether this accordion section is open.
- * @param onToggle            Invoked when the section header is tapped.
- * @param onSelectFolder      Called when the user taps the recording-folder row; opens the SAF picker.
- * @param onSelectDriveFolder Called when the user taps the Drive-folder row; opens the SAF picker.
- */
-@Composable
-private fun StorageSection(
-    preferences: AppPreferences,
-    updateTrigger: Int,
-    actions: SettingsActions,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    onSelectFolder: () -> Unit,
-    onSelectDriveFolder: () -> Unit
-) {
-    val context = LocalContext.current
-
-    val recordingFolderLabel = remember(updateTrigger) { SafHelper.getFolderDisplayNameOrNull(context, preferences.getRecordingFolderUri()) }
-    val recordingFolderIsCloud = remember(updateTrigger) { SafHelper.isCloudFolder(preferences.getRecordingFolderUri()) }
-    val storageTarget = remember(updateTrigger) { preferences.getStorageTarget() }
-    val driveFolderLabel = remember(updateTrigger) { SafHelper.getFolderDisplayNameOrNull(context, preferences.getDriveFolderUri()) }
-
-    // One open sub-section at a time, within this section only, and nothing open on entry.
-    var openSub by rememberSaveable { mutableStateOf<String?>(null) }
-
-    val storageTargetOptions = StorageTarget.entries.map { target ->
-        val labelRes = when (target) {
-            StorageTarget.LOCAL -> R.string.storage_target_local
-            StorageTarget.DRIVE -> R.string.storage_target_drive
-            StorageTarget.BOTH  -> R.string.storage_target_both
-        }
-        OptionItem(target.key, stringResource(labelRes))
-    }
-
-    SettingsSection(
-        title = stringResource(R.string.settings_section_storage),
-        expanded = expanded,
-        onToggle = onToggle,
-        wrapInCard = false,
-    ) {
-      SettingsSubSection(
-        title = stringResource(R.string.settings_storage_target_label),
-        expanded = openSub == SUB_WHERE,
-        onToggle = { openSub = if (openSub == SUB_WHERE) null else SUB_WHERE },
-      ) {
-        DropdownRow {
-            M3DropdownField(
-                label    = stringResource(R.string.settings_storage_target_label),
-                selected = storageTargetOptions.find { it.key == storageTarget.key } ?: storageTargetOptions.first(),
-                options  = storageTargetOptions,
-                onOptionSelected = { actions.setStorageTarget(StorageTarget.fromKey(it.key)) }
-            )
-        }
-
-        SettingsDivider()
-
-        // Beside the destination rather than with the deletion settings: this is about what lands in
-        // the folder, not about what is removed from it.
-        SettingsToggleRow(
-            label = stringResource(R.string.settings_metadata_file_label),
-            description = stringResource(R.string.settings_metadata_file_desc),
-            checked = remember(updateTrigger) { preferences.isWriteMetadataFileEnabled() },
-            onCheckedChange = { actions.setWriteMetadataFileEnabled(it) }
-        )
-        SettingsHint(stringResource(R.string.settings_metadata_file_hint))
-
-        // Also a destination choice: a text copy of the transcript + notes in the folder, for PC backup.
-        SettingsToggleRow(
-            label = stringResource(R.string.settings_transcript_sidecar_label),
-            description = stringResource(R.string.settings_transcript_sidecar_desc),
-            checked = remember(updateTrigger) { preferences.isWriteTranscriptSidecarEnabled() },
-            onCheckedChange = { actions.setWriteTranscriptSidecarEnabled(it) }
-        )
-        SettingsHint(stringResource(R.string.settings_transcript_sidecar_hint))
-
-        SettingsDivider()
-
-        NavigationRow(
-            icon = Icons.Filled.Folder,
-            label = stringResource(R.string.settings_recording_folder_label),
-            value = recordingFolderLabel ?: stringResource(R.string.settings_tap_to_select_folder),
-            // Surface a cloud folder (e.g. Google Drive) that was set before we started rejecting them —
-            // otherwise it's indistinguishable from a local folder by name alone.
-            supporting = if (recordingFolderIsCloud) stringResource(R.string.folder_cloud_warning) else null,
-            onClick = onSelectFolder
-        )
-
-        NavigationRow(
-            icon = Icons.Filled.Cloud,
-            label = stringResource(R.string.settings_drive_folder_label),
-            value = driveFolderLabel ?: stringResource(R.string.general_not_set),
-            supporting = stringResource(R.string.settings_drive_folder_desc),
-            onClick = onSelectDriveFolder
-        )
-
-      }
-
-        // Only meaningful when something is actually uploaded — with LOCAL there is no upload to schedule.
-        if (storageTarget != StorageTarget.LOCAL) {
-            SettingsSubSection(
-                title = stringResource(R.string.wizard_schedule_title),
-                expanded = openSub == SUB_UPLOAD,
-                onToggle = { openSub = if (openSub == SUB_UPLOAD) null else SUB_UPLOAD },
-            ) { UploadScheduleSubSection(preferences, updateTrigger, actions) }
-        }
-
-        SettingsSubSection(
-            title = stringResource(R.string.settings_wacrm_title),
-            expanded = openSub == SUB_WACRM,
-            onToggle = { openSub = if (openSub == SUB_WACRM) null else SUB_WACRM },
-        ) { WacrmSubSection(preferences, updateTrigger) }
-
-        SettingsSubSection(
-            title = stringResource(R.string.settings_section_retention),
-            expanded = openSub == SUB_RETENTION,
-            onToggle = { openSub = if (openSub == SUB_RETENTION) null else SUB_RETENTION },
-        ) { RetentionSubSection(preferences, updateTrigger, actions) }
-
-        // Sits under Storage rather than Recording because that is the only thing it changes: what a
-        // merge leaves behind on the phone. It never affects whether a merged call can be taken
-        // apart, which the description says so nobody keeps originals out of misplaced caution.
-        MergeSubSection(preferences, updateTrigger)
     }
 }
 
 /**
- * WhatsApp Max connection: email + password login that stores an encrypted user session.
+ * Login as an independent top-level Settings section (previously "WACRM Upload", nested
+ * inside Storage). Renders the same account sign-in rows, only relocated and reworded.
+ */
+@Composable
+private fun WacrmUploadSection(
+    preferences: AppPreferences,
+    updateTrigger: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit
+) {
+    SettingsSection(
+        title = stringResource(R.string.settings_section_login),
+        expanded = expanded,
+        onToggle = onToggle,
+    ) {
+        WacrmSubSection(preferences, updateTrigger)
+    }
+}
+
+/**
+ * Dialer as an independent top-level Settings section (previously nested inside the WACRM
+ * section). Renders the same click-to-dial rows, only relocated: the always-on auto-open
+ * heading, display-over-apps permission actions and the desktop-delivery connection status.
+ */
+@Composable
+private fun DialerSection(
+    updateTrigger: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onOpenLogin: () -> Unit,
+) {
+    SettingsSection(
+        title = stringResource(R.string.settings_section_dialer),
+        expanded = expanded,
+        onToggle = onToggle,
+    ) {
+        DialerSubSection(updateTrigger, onOpenLogin)
+    }
+}
+
+/**
+ * Account connection: email + password login that stores an encrypted user session.
  * Replaces the former API-key UI — no key is created, copied, or displayed anywhere here.
  *
  * States:
- * - Disconnected: server URL (shared control above) + email + password + Connect.
+ * - Disconnected: email + password + Connect (the fixed server URL from preferences is used as-is).
  * - Connecting: in-flight login, inputs disabled.
- * - Connected: account + user summary from the server-verified session + Disconnect.
+ * - Connected: account + user summary from the server-verified session + this device.
+ *
+ * Sign-out is server-driven only (see WacrmRemoteLogout): there is
+ * deliberately NO Disconnect action here. A remote wipe clears the
+ * local session without calling signOut — the session is already
+ * revoked server-side, and a signOut call would risk a global
+ * revocation of every phone and browser on the account.
  *
  * The password lives only in this composable's locals and the login call: it is never written
  * to prefs, never logged, and the field is cleared the moment Connect is tapped. After a
@@ -1112,59 +419,70 @@ private fun WacrmSubSection(preferences: AppPreferences, updateTrigger: Int) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var enabled by remember(updateTrigger) { mutableStateOf(preferences.isWacrmEnabled()) }
+    // Initialized once from the stored server URL and used for login as-is. There is no
+    // Settings UI for it anymore (fixed endpoint); the preference itself is preserved.
     var url by remember(updateTrigger) { mutableStateOf(preferences.getWacrmUrl()) }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var connecting by remember { mutableStateOf(false) }
-    var session by remember { mutableStateOf<WacrmSession.Session?>(null) }
+    // Process-wide session snapshot (see WacrmSessionState): the
+    // Connected block and the sign-in form both read these derived
+    // values, so a background remote-logout wipe recomposes an open
+    // Settings screen instead of showing a stale session.
+    val snapshot by WacrmSessionState.flow.collectAsStateWithLifecycle()
+    val session: WacrmSession.Session? = snapshot.session
+    // True once the encrypted store has answered at least once.
+    val sessionChecked: Boolean = snapshot.checked
     // One-shot notice (success/error text), cleared by the next edit.
     var notice by remember { mutableStateOf<String?>(null) }
-    // Null while the encrypted store has not answered yet.
-    var sessionChecked by remember { mutableStateOf(false) }
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     LaunchedEffect(updateTrigger) {
-        session = withContext(Dispatchers.IO) { WacrmSession.get(context) }
-        sessionChecked = true
+        withContext(Dispatchers.IO) { WacrmSessionState.refresh(context) }
     }
 
-    val urlValid = remember(url) { WacrmApi.normalizeBaseUrl(url) != null }
-
-    SettingsToggleRow(
-        label = stringResource(R.string.settings_wacrm_enable_label),
-        description = stringResource(R.string.settings_wacrm_enable_desc),
-        checked = enabled,
-        onCheckedChange = {
-            enabled = it
-            preferences.setWacrmEnabled(it)
+    // Re-read on return from background: a wipe may have landed
+    // while this screen was stopped. Silent and off-main; the
+    // status check below is best-effort and wipes ONLY on an
+    // explicit revoked==true (guaranteed by
+    // checkStatusAndWipeIfRevoked) — never on network failure.
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        WacrmSessionState.refresh(context)
+                        val current = WacrmSessionState.flow.value.session
+                        val base = WacrmApi.normalizeBaseUrl(preferences.getWacrmUrl())
+                        if (current != null && base != null) {
+                            runCatching {
+                                WacrmDeviceAuth.checkStatusAndWipeIfRevoked(
+                                    context,
+                                    base,
+                                    current.accessToken
+                                )
+                            }
+                            WacrmSessionState.refresh(context)
+                        }
+                        val shown = WacrmSessionState.flow.value.session != null
+                        AppLogger.i("CV:Settings", "SETTINGS_CONNECTED_STATE connected=$shown")
+                    } catch (_: Exception) {
+                        // Silent: never throw out of the observer.
+                    }
+                }
+            }
         }
-    )
-
-    SettingsDivider()
-
-    Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
-        Text(
-            text = stringResource(R.string.settings_wacrm_url_label),
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Spacer(Modifier.height(6.dp))
-        OutlinedTextField(
-            value = url,
-            onValueChange = {
-                url = it
-                preferences.setWacrmUrl(it)
-            },
-            singleLine = true,
-            placeholder = { Text("https://whatsappmax.in") },
-            isError = url.isNotBlank() && !urlValid,
-            modifier = Modifier.fillMaxWidth()
-        )
-        HintText(stringResource(R.string.settings_wacrm_url_hint))
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    SettingsDivider()
+    // Uploads are automatic once signed in (no separate switch): a valid session is what
+    // enables them, so there is no toggle here. The stored preference is still flipped on
+    // at login for the rest of the integration (dial delivery, event reporting).
+
+    // Server URL field intentionally not shown: the stored URL is used as-is for login.
+    // (The editable field was removed from Settings; the endpoint is fixed.)
 
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
         Text(
@@ -1173,12 +491,6 @@ private fun WacrmSubSection(preferences: AppPreferences, updateTrigger: Int) {
             color = MaterialTheme.colorScheme.onSurface
         )
         Spacer(Modifier.height(4.dp))
-        Text(
-            text = stringResource(R.string.settings_wacrm_connect_desc),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(Modifier.height(8.dp))
         if (!sessionChecked) {
             // Store not answered yet — show nothing rather than flashing "not connected".
         } else if (session != null) {
@@ -1200,33 +512,6 @@ private fun WacrmSubSection(preferences: AppPreferences, updateTrigger: Int) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(
-                    onClick = {
-                        val current = session
-                        scope.launch(Dispatchers.IO) {
-                            // Best-effort server revocation first, then wipe local credentials
-                            // unconditionally — Disconnect must always leave nothing behind.
-                            if (current != null) {
-                                val base = WacrmApi.normalizeBaseUrl(preferences.getWacrmUrl())
-                                if (base != null) {
-                                    val config = WacrmAuth.fetchMobileConfig(base)
-                                    if (config != null) {
-                                        WacrmAuth.signOut(config, current.accessToken)
-                                    }
-                                }
-                            }
-                            WacrmSession.clear(context)
-                            withContext(Dispatchers.Main) {
-                                session = null
-                                password = ""
-                                notice = null
-                            }
-                        }
-                    }
-                ) { Text(stringResource(R.string.settings_wacrm_disconnect)) }
-            }
         } else {
             OutlinedTextField(
                 value = email,
@@ -1288,12 +573,20 @@ private fun WacrmSubSection(preferences: AppPreferences, updateTrigger: Int) {
                             } else {
                                 when (val login = WacrmAuth.signIn(config, emailValue, passwordValue)) {
                                     is WacrmAuth.AuthOutcome.Ok -> {
-                                        val me = WacrmAuth.fetchMe(base, login.session.accessToken)
+                                        val me = WacrmAuth.fetchMe(
+                                            base,
+                                            login.session.accessToken,
+                                            deviceId = com.baba.callvault.system.storage.DialDeviceId.get(context)
+                                        )
                                         if (me == null) {
                                             failureNotice =
                                                 context.getString(R.string.settings_wacrm_unreachable)
                                         } else {
-                                            WacrmSession.save(
+                                            // Durable save first: commit (not apply), and success
+                                            // is reported only if it committed. A failed save
+                                            // keeps the user disconnected instead of stranding a
+                                            // memory-only session. Already on Dispatchers.IO.
+                                            val saved = WacrmSession.save(
                                                 context,
                                                 login.session.accessToken,
                                                 login.session.refreshToken,
@@ -1305,14 +598,33 @@ private fun WacrmSubSection(preferences: AppPreferences, updateTrigger: Int) {
                                                 me.accountName,
                                                 me.role
                                             )
-                                            // Pull this user's WhatsApp recording source now
-                                            // that the session exists. A failed sync keeps
-                                            // the last-known source — never a silent flip.
-                                            WhatsappSourceSync.syncAfterAuth(
-                                                context,
-                                                base,
-                                                login.session.accessToken
-                                            )
+                                            if (!saved) {
+                                                failureNotice =
+                                                    context.getString(R.string.settings_wacrm_unreachable)
+                                            } else {
+                                                // Fresh login: drop any previous user's Owner policy
+                                                // BEFORE fetching this user's, so a failed first sync
+                                                // can never expose the previous salesperson's settings.
+                                                WhatsappSourceSync.clearRecordingPolicy(AppPreferences(context))
+                                                // Pull this user's WhatsApp recording source now
+                                                // that the session exists. A failed sync keeps
+                                                // the last-known source — never a silent flip.
+                                                WhatsappSourceSync.syncAfterAuth(
+                                                    context,
+                                                    base,
+                                                    login.session.accessToken,
+                                                    deviceId = com.baba.callvault.system.storage.DialDeviceId.get(context)
+                                                )
+                                                // Register this device for server-driven
+                                                // sign-out. Best-effort and silent: a network
+                                                // failure here must NOT fail the login — the
+                                                // socket connect retries it (ensureRegistered).
+                                                com.baba.callvault.system.storage.WacrmDeviceAuth.registerBestEffort(
+                                                    context,
+                                                    base,
+                                                    login.session.accessToken
+                                                )
+                                            }
                                         }
                                     }
                                     is WacrmAuth.AuthOutcome.InvalidCredentials ->
@@ -1330,7 +642,15 @@ private fun WacrmSubSection(preferences: AppPreferences, updateTrigger: Int) {
                                     notice = failureNotice
                                 } else {
                                     notice = null
-                                    session = WacrmSession.get(context)
+                                    val fresh = WacrmSession.get(context)
+                                    WacrmSessionState.publish(fresh)
+                                    // A signed-in account is sufficient for automatic uploads (no
+                                    // separate switch): flip the stored flag on so the rest of the
+                                    // integration (dial delivery, event reporting) keeps working as
+                                    // when the old toggle was on. Uploads themselves are gated on
+                                    // the live session, so an old `false` can never block them.
+                                    preferences.setWacrmEnabled(true)
+                                    com.baba.callvault.system.storage.DialSocketService.ensureStarted(context)
                                 }
                             }
                         }
@@ -1340,245 +660,205 @@ private fun WacrmSubSection(preferences: AppPreferences, updateTrigger: Int) {
             }
         }
         if (notice != null) HintText(notice!!)
+    }
+}
 
-        SettingsDivider()
+/**
+ * Click-to-dial from the desktop (call delivery for the signed-in account): a readiness
+ * header, the display-over-apps and background permission rows, and the live
+ * desktop-delivery status. Previously nested inside the WACRM section; now its own
+ * top-level section. All permission and connection behavior is unchanged.
+ *
+ * State is re-read on return from system Settings (same pattern as [WacrmSubSection]) and
+ * the socket flag is re-polled gently while this section is visible, so neither the
+ * permission rows nor the connection indicator can go stale.
+ */
+@Composable
+private fun DialerSubSection(updateTrigger: Int, onOpenLogin: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
-        // Click-to-dial auto-open: explicit opt-in, off by default.
-        // When on AND the system "Display over other apps" permission is
-        // granted, an authorized WhatsApp Max dial request opens the
-        // native dialer by itself (foreground immediately; background
-        // via a brief on-screen notice, at most every 15 minutes while
-        // the app is closed). Otherwise every request arrives as a
-        // notification to tap. Nothing here ever places a call.
-        var autoOpen by remember(updateTrigger) { mutableStateOf(preferences.isDialAutoOpen()) }
-        var overlayTick by remember { mutableStateOf(0) }
-        val canOverlay = remember(updateTrigger, overlayTick) {
-            android.provider.Settings.canDrawOverlays(context)
-        }
-        SettingsToggleRow(
-            label = stringResource(R.string.settings_wacrm_auto_open_label),
-            description = stringResource(R.string.settings_wacrm_auto_open_desc),
-            checked = autoOpen,
-            onCheckedChange = {
-                autoOpen = it
-                preferences.setDialAutoOpen(it)
-                com.baba.callvault.system.storage.DialPollScheduler.apply(context)
+    // Manual refresh, and the key that re-reads the permission states below.
+    var overlayTick by remember { mutableStateOf(0) }
+    var resumeTick by remember { mutableStateOf(0) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                resumeTick++
+                scope.launch(Dispatchers.IO) { WacrmSessionState.refresh(context) }
             }
-        )
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // The socket itself stays the source of truth for delivery; `connected`
+    // below is a one-shot read for the header badge (refreshed on resume /
+    // manual check). No polling lives here anymore.
+
+    val canOverlay = remember(updateTrigger, resumeTick, overlayTick) {
+        android.provider.Settings.canDrawOverlays(context)
+    }
+    val powerManager = remember(updateTrigger, resumeTick, overlayTick) {
+        context.getSystemService(android.os.PowerManager::class.java)
+    }
+    val batteryUnrestricted = remember(updateTrigger, resumeTick, overlayTick) {
+        powerManager?.isIgnoringBatteryOptimizations(context.packageName) == true
+    }
+    val sessionSnapshot by WacrmSessionState.flow.collectAsStateWithLifecycle()
+    val hasSession = sessionSnapshot.session != null
+    val connected = remember(updateTrigger, resumeTick, overlayTick) {
+        DialSocketClient.isConnected
+    }
+    var lastCheckedMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(updateTrigger, resumeTick, overlayTick) {
+        lastCheckedMs = System.currentTimeMillis()
+    }
+
+    val (badgeTextRes, badgeTone) = when {
+        !hasSession -> R.string.settings_dialer_badge_signin to CvTone.Warning
+        !canOverlay -> R.string.settings_dialer_badge_setup to CvTone.Warning
+        !connected -> R.string.settings_dialer_badge_connecting to CvTone.Info
+        else -> R.string.settings_dialer_badge_ready to CvTone.Success
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        // Header: title + live readiness badge. Auto-open is always on, so there is no
+        // switch — the badge is the whole state summary.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(start = 16.dp, end = 12.dp, top = 8.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = if (canOverlay) stringResource(R.string.settings_wacrm_auto_open_granted)
-                else stringResource(R.string.settings_wacrm_auto_open_missing),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f)
+                text = stringResource(R.string.settings_dialer_heading),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = { overlayTick += 1 }) {
-                Text(stringResource(R.string.settings_wacrm_auto_open_recheck))
-            }
+            CvStatusPill(text = stringResource(badgeTextRes), tone = badgeTone)
         }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
+        SettingsDivider()
+
+        if (!hasSession) {
+            DialerRow(
+                title = stringResource(R.string.settings_dialer_badge_signin),
+            ) {
+                TextButton(onClick = onOpenLogin) {
+                    Text(stringResource(R.string.settings_dialer_go_to_login))
+                }
+            }
+            SettingsDivider()
+        }
+
+        DialerRow(
+            title = stringResource(R.string.settings_dialer_overlay_title),
         ) {
-            TextButton(
-                onClick = {
+            if (canOverlay) {
+                CvStatusPill(
+                    text = stringResource(R.string.settings_dialer_allowed),
+                    tone = CvTone.Success,
+                )
+            } else {
+                TextButton(onClick = {
                     context.startActivity(
                         android.content.Intent(
                             android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                             android.net.Uri.parse("package:" + context.packageName)
                         )
                     )
-                }
-            ) { Text(stringResource(R.string.settings_wacrm_auto_open_grant)) }
+                }) { Text(stringResource(R.string.settings_dialer_allow)) }
+            }
+        }
+
+        DialerRow(
+            title = stringResource(R.string.settings_dialer_background_title),
+        ) {
+            if (batteryUnrestricted) {
+                CvStatusPill(
+                    text = stringResource(R.string.settings_dialer_allowed),
+                    tone = CvTone.Success,
+                )
+            } else {
+                TextButton(onClick = {
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent(
+                                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                android.net.Uri.parse("package:" + context.packageName)
+                            )
+                        )
+                    }
+                }) { Text(stringResource(R.string.settings_dialer_allow)) }
+            }
+        }
+
+        SettingsDivider()
+
+        // Footer: when the states were last verified, plus manual refresh.
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 8.dp, top = 2.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(
+                    R.string.settings_dialer_last_checked,
+                    DateUtils.getRelativeTimeSpanString(
+                        lastCheckedMs,
+                        System.currentTimeMillis(),
+                        DateUtils.MINUTE_IN_MILLIS,
+                    ).toString(),
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = { overlayTick++ }) {
+                Text(stringResource(R.string.settings_wacrm_auto_open_recheck))
+            }
         }
     }
 }
 
-/** The one thing merging asks of the user: whether to keep the calls it was made from. */
-@Composable
-private fun MergeSubSection(preferences: AppPreferences, updateTrigger: Int) {
-    var keep by remember(updateTrigger) { mutableStateOf(preferences.isKeepOriginalsAfterMerge()) }
-    SettingsToggleRow(
-        label = stringResource(R.string.settings_merge_keep_originals_title),
-        checked = keep,
-        onCheckedChange = {
-            keep = it
-            preferences.setKeepOriginalsAfterMerge(it)
-        },
-        description = stringResource(R.string.settings_merge_keep_originals_description),
-        descriptionBelow = true,
-    )
-}
-
 /**
- * On-device transcription: whether it happens on its own, when, and with which model.
- *
- * The mode dropdown comes first and the scheduling rows appear only under Automatic, so a user who
- * wants to transcribe the occasional call by hand is never shown a run time they do not use. Same
- * shape as [UploadScheduleSubSection], which already does exactly this for the upload cadence.
- *
- * Model and language stay visible in both modes: a manual transcription needs them just as much as an
- * automatic one, and the model has to be downloaded before either can work at all.
+ * One dialer row: title on the left (plus an optional description underneath), and a
+ * trailing status or action on the right. The trailing slot holds either a status pill
+ * (nothing left to do) or the one button that fixes this row — buttons never appear
+ * next to an already-healthy row.
  */
 @Composable
-private fun TranscriptionSection(
-    preferences: AppPreferences,
-    updateTrigger: Int,
-    actions: SettingsActions,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    /** The summariser's rows, rendered last — see the call site for why they live in here. */
-    summaryRows: @Composable () -> Unit = {}
+private fun DialerRow(
+    title: String,
+    description: String? = null,
+    trailing: @Composable RowScope.() -> Unit,
 ) {
-    val mode = remember(updateTrigger) { preferences.getTranscriptionMode() }
-    val hour = remember(updateTrigger) { preferences.getTranscriptionHour() }
-    val minute = remember(updateTrigger) { preferences.getTranscriptionMinute() }
-    val requiresCharging = remember(updateTrigger) { preferences.getTranscriptionRequiresCharging() }
-    val batchLimit = remember(updateTrigger) { preferences.getTranscriptionBatchLimit() }
-    val confirmBeforeRun = remember(updateTrigger) { preferences.getTranscriptionConfirmBeforeRun() }
-    val modelId = remember(updateTrigger) { preferences.getTranscriptionModelId() }
-    val language = remember(updateTrigger) { preferences.getTranscriptionLanguage() }
-    val askLanguage = remember(updateTrigger) { preferences.getTranscriptionAskLanguage() }
-
-    val selectedModel = TranscriptionModel.fromId(modelId) ?: TranscriptionModel.DEFAULT
-
-    SettingsSection(
-        title = stringResource(R.string.settings_section_transcription_and_summaries),
-        expanded = expanded,
-        onToggle = onToggle
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        var showTimePicker by remember { mutableStateOf(false) }
-
-        TranscriptionModeField(mode = mode, onModeChange = { actions.setTranscriptionMode(it) })
-
-        // Only the scheduled sweep has a run time and a backlog size to choose. Per-call has neither:
-        // it runs when a call ends, and only ever on that one call.
-        if (mode == TranscriptionMode.AUTOMATIC) {
-            NavigationRow(
-                icon = Icons.Filled.Schedule,
-                label = stringResource(R.string.transcription_time_label),
-                value = formatRunTime(hour, minute),
-                onClick = { showTimePicker = true }
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
             )
-
-            if (showTimePicker) {
-                TranscriptionTimeDialog(
-                    hour = hour,
-                    minute = minute,
-                    onDismiss = { showTimePicker = false },
-                    onConfirm = { h, m ->
-                        actions.setTranscriptionHour(h)
-                        actions.setTranscriptionMinute(m)
-                        showTimePicker = false
-                    }
-                )
-            }
-
-            val batchOptions = TranscriptionLabels.BATCH_LIMIT_OPTIONS.map { limit ->
-                OptionItem(
-                    limit.toString(),
-                    if (limit == TranscriptionQueue.NO_LIMIT) {
-                        stringResource(R.string.transcription_batch_no_limit)
-                    } else {
-                        limit.toString()
-                    }
-                )
-            }
-            DropdownRow {
-                M3DropdownField(
-                    label = stringResource(R.string.transcription_batch_label),
-                    selected = batchOptions.find { it.key == batchLimit.toString() } ?: batchOptions.first(),
-                    options = batchOptions,
-                    onOptionSelected = { actions.setTranscriptionBatchLimit(it.key.toIntOrNull() ?: 25) }
+            if (description != null) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
-
-        // Shown for both automatic modes. It matters most for per-call, where a call can end anywhere:
-        // the run then waits for a charger rather than being skipped.
-        if (mode != TranscriptionMode.MANUAL) {
-            SettingsToggleRow(
-                icon = Icons.Filled.BatteryChargingFull,
-                label = stringResource(R.string.transcription_charging_title),
-                description = stringResource(R.string.transcription_charging_subtitle),
-                checked = requiresCharging,
-                onCheckedChange = { actions.setTranscriptionRequiresCharging(it) }
-            )
-        }
-
-        TranscriptionModelField(
-            modelId = modelId,
-            onModelChange = { actions.setTranscriptionModelId(it) }
-        )
-
-        TranscriptionLanguageField(
-            language = language,
-            onLanguageChange = { chosen ->
-                // Clears the summary's own override as well as setting the transcription language.
-                // The override used to be a second, separate setting; anyone who set it before this
-                // merge would otherwise keep summarising in that old language for ever, with nothing
-                // on screen to say so.
-                preferences.setSummaryLanguage(null)
-                actions.setTranscriptionLanguage(chosen)
-            }
-        )
-
-        // Directly under the language it overrides, because it only makes sense as an answer to
-        // "but this call was in another language".
-        SettingsToggleRow(
-            icon = Icons.Filled.Translate,
-            label = stringResource(R.string.transcription_ask_language_title),
-            description = stringResource(R.string.transcription_ask_language_subtitle),
-            checked = askLanguage,
-            onCheckedChange = { actions.setTranscriptionAskLanguage(it) }
-        )
-
-        // Its home is here so the "don't ask again" checkbox in the dialog can be undone — a dialog
-        // that can permanently remove itself with no way back would be a trap.
-        SettingsToggleRow(
-            icon = Icons.Filled.Schedule,
-            label = stringResource(R.string.transcription_confirm_title),
-            description = stringResource(R.string.transcription_confirm_subtitle),
-            checked = confirmBeforeRun,
-            onCheckedChange = { actions.setTranscriptionConfirmBeforeRun(it) }
-        )
-
-        // Shared with the wizard, which now offers the same download. These rows also replaced a
-        // pair that read `installedModels` once per updateTrigger: a download that ran while this
-        // section was open showed nothing at all, and only reached "Downloaded and ready" if some
-        // unrelated setting happened to bump the trigger.
-        TranscriptionModelRows(
-            model = selectedModel,
-            updateTrigger = updateTrigger,
-            onDownload = { actions.downloadTranscriptionModel(it) },
-            onCancel = { actions.cancelTranscriptionModelDownload(it) },
-            onDelete = { actions.deleteTranscriptionModel(it) }
-        )
-
-        Text(
-            text = stringResource(
-                when (mode) {
-                    TranscriptionMode.MANUAL -> R.string.transcription_note_manual
-                    TranscriptionMode.AFTER_EACH_CALL -> R.string.transcription_note_after_each_call
-                    TranscriptionMode.AUTOMATIC -> R.string.transcription_note_automatic
-                }
-            ),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-        )
-
-        // Last, after everything transcription needs: a summary is read from a transcript, so the
-        // order on screen is the order of the dependency.
-        summaryRows()
+        Spacer(Modifier.width(12.dp))
+        trailing()
     }
 }
 
@@ -1729,876 +1009,6 @@ internal fun TranscriptionLanguageField(
     }
 }
 
-/**
- * When finished recordings are uploaded to the Drive folder.
- *
- * The choice already drove `StorageRouter.route` and [SyncScheduler] from the day it shipped, but the
- * picker existed ONLY in the setup wizard — and the wizard cannot be re-run, so whatever was chosen
- * during onboarding (defaulting to "immediately") was permanent. Issue #20 is a user who went looking
- * for it and reasonably concluded it did not exist.
- *
- * Deferring batches the Drive app's "upload finished" notifications into one run per day or week
- * instead of one per call, which is what that reporter actually wanted; it does not silence them.
- */
-@Composable
-private fun UploadScheduleSubSection(
-    preferences: AppPreferences,
-    updateTrigger: Int,
-    actions: SettingsActions
-) {
-    val mode = remember(updateTrigger) { preferences.getSyncScheduleMode() }
-    val hour = remember(updateTrigger) { preferences.getSyncTimeHour() }
-    val minute = remember(updateTrigger) { preferences.getSyncTimeMinute() }
-    val dayOfWeek = remember(updateTrigger) { preferences.getSyncDayOfWeek() }
-
-    val modeOptions = SyncScheduleMode.entries.map {
-        OptionItem(it.key, stringResource(SyncScheduleLabels.titleOf(it)))
-    }
-
-    DropdownRow {
-        M3DropdownField(
-            label = stringResource(R.string.wizard_schedule_mode_label),
-            selected = modeOptions.find { it.key == mode.key } ?: modeOptions.first(),
-            options = modeOptions,
-            onOptionSelected = { actions.setSyncScheduleMode(SyncScheduleMode.fromKey(it.key)) }
-        )
-    }
-
-    if (mode == SyncScheduleMode.WEEKLY) {
-        val dayOptions = SyncScheduleLabels.DAY_OF_WEEK_OPTIONS.map { day ->
-            OptionItem(day.toString(), stringResource(SyncScheduleLabels.dayOfWeekOf(day)))
-        }
-        DropdownRow {
-            M3DropdownField(
-                label = stringResource(R.string.wizard_schedule_day_label),
-                selected = dayOptions.find { it.key == dayOfWeek.toString() } ?: dayOptions.first(),
-                options = dayOptions,
-                onOptionSelected = { actions.setSyncDayOfWeek(it.key.toIntOrNull() ?: 2) }
-            )
-        }
-    }
-
-    if (mode != SyncScheduleMode.IMMEDIATE) {
-        val hourOptions = (0..23).map { OptionItem(it.toString(), it.toString().padStart(2, '0')) }
-        val minuteOptions = SyncScheduleLabels.MINUTE_OPTIONS.map {
-            OptionItem(it.toString(), it.toString().padStart(2, '0'))
-        }
-        DropdownRow {
-            M3DropdownField(
-                label = stringResource(R.string.wizard_schedule_hour_label),
-                selected = hourOptions.find { it.key == hour.toString() } ?: hourOptions.first(),
-                options = hourOptions,
-                onOptionSelected = { actions.setSyncTimeHour(it.key.toIntOrNull() ?: 2) }
-            )
-        }
-        DropdownRow {
-            M3DropdownField(
-                label = stringResource(R.string.wizard_schedule_minute_label),
-                selected = minuteOptions.find { it.key == minute.toString() } ?: minuteOptions.first(),
-                options = minuteOptions,
-                onOptionSelected = { actions.setSyncTimeMinute(it.key.toIntOrNull() ?: 0) }
-            )
-        }
-    }
-
-    Text(
-        text = stringResource(
-            if (mode == SyncScheduleMode.IMMEDIATE) R.string.wizard_schedule_immediate_note
-            else R.string.wizard_schedule_subtitle
-        ),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-    )
-}
-
-/**
- * A destructive settings change waiting on the user's confirmation, with the sentence that explains
- * what it will do. Carrying the message with the action is what stops the age period and the size
- * cap — which delete for different reasons — sharing one vague warning.
- */
-private data class PendingDestructiveChange(
-    @androidx.annotation.StringRes val messageRes: Int,
-    val apply: () -> Unit
-)
-
-/** Retention: auto-delete recordings older than a chosen period. One shared period for device & Drive,
- * or a separate period for each. Destructive, so it defaults to "Keep forever" and a confirmation is
- * shown the first time a non-forever period is chosen.
- *
- * @param preferences   The [AppPreferences] instance to read data from.
- * @param updateTrigger Trigger value to force recomposition when settings change.
- * @param actions       Implementation of [SettingsActions] to handle user interaction.
- * @param expanded      Whether this accordion section is open.
- * @param onToggle      Invoked when the section header is tapped.
- */
-@Composable
-private fun RetentionSubSection(
-    preferences: AppPreferences,
-    updateTrigger: Int,
-    actions: SettingsActions
-) {
-    val minDurationSeconds = remember(updateTrigger) { preferences.getMinDurationSeconds() }
-    val minDurationOptions = MinDurationPolicy.PRESET_SECONDS.map { seconds ->
-        OptionItem(
-            seconds.toString(),
-            when (seconds) {
-                0 -> stringResource(R.string.min_duration_off)
-                60 -> stringResource(R.string.min_duration_one_minute)
-                else -> stringResource(R.string.min_duration_seconds, seconds)
-            }
-        )
-    }
-    val capBytes = remember(updateTrigger) { preferences.getStorageCapBytes() }
-    val capOptions = StorageCapPolicy.PRESET_BYTES.map { bytes ->
-        OptionItem(
-            bytes.toString(),
-            if (bytes == 0L) stringResource(R.string.storage_cap_off)
-            else stringResource(R.string.storage_cap_gigabytes, bytes / (1L shl 30))
-        )
-    }
-    val linked = remember(updateTrigger) { preferences.isRetentionLinked() }
-    val localDays = remember(updateTrigger) { preferences.getRetentionLocalDays() }
-    val driveDays = remember(updateTrigger) { preferences.getRetentionDriveDays() }
-
-    val options = RetentionPeriod.entries.map { OptionItem(it.days.toString(), stringResource(it.labelRes)) }
-    fun optionFor(days: Int) =
-        options.find { it.key == RetentionPeriod.fromDays(days).days.toString() } ?: options.first()
-
-    // Turning either destructive setting on from OFF is confirmed first. The message differs: an age
-    // period deletes by age and the cap deletes by size, and one sentence covering both would be
-    // vague exactly where the user is being asked to authorise deleting their own recordings.
-    var pendingConfirm by remember { mutableStateOf<PendingDestructiveChange?>(null) }
-    fun applyOrConfirm(wasOff: Boolean, newDays: Int, apply: () -> Unit) {
-        if (wasOff && newDays > 0) {
-            pendingConfirm = PendingDestructiveChange(R.string.retention_confirm_message, apply)
-        } else {
-            apply()
-        }
-    }
-
-    Column {
-        // First, because it is the only control here that decides whether a recording is ever kept
-        // at all — the rest decide how long a kept one lives. Not confirmed like the periods below:
-        // it takes nothing that already exists, so the worst a mistaken setting can do is stop
-        // capturing short calls from now on, which is visible and instantly reversible.
-        DropdownRow {
-            M3DropdownField(
-                label = stringResource(R.string.min_duration_label),
-                selected = minDurationOptions.find { it.key == minDurationSeconds.toString() }
-                    ?: minDurationOptions.first(),
-                options = minDurationOptions,
-                onOptionSelected = { actions.setMinDurationSeconds(it.key.toIntOrNull() ?: 0) }
-            )
-        }
-        SettingsHint(stringResource(R.string.min_duration_caption))
-
-        SettingsDivider()
-
-        SettingsToggleRow(
-            label = stringResource(R.string.retention_linked_label),
-            checked = linked,
-            onCheckedChange = { nowLinked ->
-                actions.setRetentionLinked(nowLinked)
-                // When linking, unify the Drive period to the device one so they match.
-                if (nowLinked) actions.setRetentionDriveDays(localDays)
-            }
-        )
-
-        SettingsDivider()
-
-        if (linked) {
-            DropdownRow {
-                M3DropdownField(
-                    label = stringResource(R.string.retention_period_label),
-                    selected = optionFor(localDays),
-                    options = options,
-                    onOptionSelected = { opt ->
-                        val days = opt.key.toIntOrNull() ?: 0
-                        applyOrConfirm(wasOff = localDays == 0 && driveDays == 0, newDays = days) {
-                            actions.setRetentionLocalDays(days)
-                            actions.setRetentionDriveDays(days)
-                        }
-                    }
-                )
-            }
-        } else {
-            DropdownRow {
-                M3DropdownField(
-                    label = stringResource(R.string.retention_local_label),
-                    selected = optionFor(localDays),
-                    options = options,
-                    onOptionSelected = { opt ->
-                        val days = opt.key.toIntOrNull() ?: 0
-                        applyOrConfirm(wasOff = localDays == 0, newDays = days) { actions.setRetentionLocalDays(days) }
-                    }
-                )
-            }
-            DropdownRow {
-                M3DropdownField(
-                    label = stringResource(R.string.retention_drive_label),
-                    selected = optionFor(driveDays),
-                    options = options,
-                    onOptionSelected = { opt ->
-                        val days = opt.key.toIntOrNull() ?: 0
-                        applyOrConfirm(wasOff = driveDays == 0, newDays = days) { actions.setRetentionDriveDays(days) }
-                    }
-                )
-            }
-        }
-
-        SettingsDivider()
-
-        // Device only. A Drive copy costs nothing on this phone and has its own quota, so deleting
-        // one to free space here would be indefensible — and because only the device copy goes, a
-        // recording that is also in Drive keeps its transcript and its place in the list.
-        DropdownRow {
-            M3DropdownField(
-                label = stringResource(R.string.storage_cap_label),
-                selected = capOptions.find { it.key == capBytes.toString() } ?: capOptions.first(),
-                options = capOptions,
-                onOptionSelected = { opt ->
-                    val bytes = opt.key.toLongOrNull() ?: 0L
-                    if (capBytes == 0L && bytes > 0L) {
-                        pendingConfirm = PendingDestructiveChange(R.string.storage_cap_confirm_message) {
-                            actions.setStorageCapBytes(bytes)
-                        }
-                    } else {
-                        actions.setStorageCapBytes(bytes)
-                    }
-                }
-            )
-        }
-        SettingsHint(stringResource(R.string.storage_cap_caption))
-
-        // Sweep time — only relevant once retention is enabled. Two dropdowns (Hour/Minute) in the
-        // device's LOCAL time zone, mirroring the sync-schedule picker. The cap counts: it runs in
-        // this same daily sweep, so a cap-only setup still needs to be able to say when.
-        if (localDays > 0 || driveDays > 0 || capBytes > 0L) {
-            SettingsDivider()
-            val hour = remember(updateTrigger) { preferences.getRetentionTimeHour() }
-            val minute = remember(updateTrigger) { preferences.getRetentionTimeMinute() }
-            val hourOptions = (0..23).map { OptionItem(it.toString(), it.toString().padStart(2, '0')) }
-            val minuteOptions = listOf(0, 15, 30, 45).map { OptionItem(it.toString(), it.toString().padStart(2, '0')) }
-            Text(
-                text = stringResource(R.string.retention_time_label),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 16.dp, top = 8.dp)
-            )
-            DropdownRow {
-                M3DropdownField(
-                    label = stringResource(R.string.wizard_schedule_hour_label),
-                    selected = hourOptions.find { it.key == hour.toString() } ?: hourOptions.first(),
-                    options = hourOptions,
-                    onOptionSelected = { actions.setRetentionTimeHour(it.key.toIntOrNull() ?: 0) }
-                )
-            }
-            DropdownRow {
-                M3DropdownField(
-                    label = stringResource(R.string.wizard_schedule_minute_label),
-                    selected = minuteOptions.find { it.key == minute.toString() } ?: minuteOptions.first(),
-                    options = minuteOptions,
-                    onOptionSelected = { actions.setRetentionTimeMinute(it.key.toIntOrNull() ?: 0) }
-                )
-            }
-        }
-
-        Text(
-            text = stringResource(R.string.retention_description),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-        )
-    }
-
-    pendingConfirm?.let { confirm ->
-        AlertDialog(
-            onDismissRequest = { pendingConfirm = null },
-            title = { Text(stringResource(R.string.retention_confirm_title)) },
-            text = { Text(stringResource(confirm.messageRes)) },
-            confirmButton = {
-                TextButton(onClick = { confirm.apply(); pendingConfirm = null }) {
-                    Text(stringResource(R.string.retention_confirm_enable))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingConfirm = null }) {
-                    Text(stringResource(R.string.general_cancel))
-                }
-            }
-        )
-    }
-}
-
-/** Shows the audio source, codec, and bit-rate dropdowns.
- *
- * The audio-source list is generated from [ScrcpyAudioSource.entries] with debug-only entries
- * ([ScrcpyAudioSource.isDebugOnly]) always hidden. Items whose
- * [ScrcpyAudioSource.minApi]/[ScrcpyAudioSource.maxApi] range does not include the current
- * device's API level are shown grayed out and cannot be selected.
- *
- * @param preferences   The [AppPreferences] instance to read data from.
- * @param updateTrigger Trigger value to force recomposition when settings change.
- * @param actions       Implementation of [SettingsActions] to handle user interaction.
- */
-@Composable
-private fun AudioSection(preferences: AppPreferences, updateTrigger: Int, actions: SettingsActions, expanded: Boolean, onToggle: () -> Unit) {
-
-    val audioSource = remember(updateTrigger) { preferences.getAudioSource() }
-    val audioCodec = remember(updateTrigger) { preferences.getAudioCodec() }
-    val savedBitRate = remember(updateTrigger) { preferences.getAudioBitRate() }
-
-    SettingsSection(title = stringResource(R.string.settings_section_audio), expanded = expanded, onToggle = onToggle) {
-        val currentSdk = Build.VERSION.SDK_INT
-
-        // Build the source list from the enum, always hiding debug-only entries.
-        // Items that require an API level not available on this device are shown as disabled.
-        // `voice-call` is flagged in the list the same way the recommended bit rate is, because the
-        // four sources are not peers however evenly the dropdown presents them. Measured on a OnePlus 9
-        // Pro, 2026-08-25, same call and same clip: voice-call captures two channels at -42 dB with
-        // speaker attribution; `mic-voice-communication` captures ONE channel at -51.7 dB, is barely
-        // audible, and silently produces no speaker turns at all — there is nothing to attribute. The
-        // others exist for devices where voice-call is unavailable, which is worth keeping and worth
-        // saying at the point where someone picks one.
-        val recommendedSourceLabel = stringResource(R.string.general_recommended)
-        val audioSourceOptions = ScrcpyAudioSource.entries
-            .filter { !it.isDebugOnly }
-            .map { source ->
-                val title = stringResource(source.titleResId)
-                OptionItem(
-                    key         = source.cliKey,
-                    label       = if (source == ScrcpyAudioSource.VOICE_CALL) {
-                        "$title ($recommendedSourceLabel)"
-                    } else {
-                        title
-                    },
-                    description = stringResource(source.descriptionResId),
-                    // Enabled only when the current SDK is within the source's API range.
-                    enabled     = currentSdk >= source.minApi &&
-                                  (source.maxApi == null || currentSdk <= source.maxApi)
-                )
-            }
-
-        val selectedAudio = audioSourceOptions.find { it.key == audioSource }
-            ?: audioSourceOptions.first()
-
-        DropdownRow {
-            M3DropdownField(
-                label    = stringResource(R.string.settings_audio_source),
-                selected = selectedAudio,
-                options  = audioSourceOptions,
-                onOptionSelected = { actions.setAudioSource(it.key) }
-            )
-            // Show the description of the currently selected audio source below the dropdown.
-            selectedAudio.description?.let { desc ->
-                HintText(desc)
-            }
-        }
-
-        val codecOptions = ScrcpyAudioCodec.entries
-            .map { OptionItem(it.cliKey, stringResource(it.titleResId)) }
-
-        DropdownRow {
-            M3DropdownField(
-                label    = stringResource(R.string.settings_audio_codec),
-                selected = codecOptions.find { it.key == audioCodec }
-                    ?: codecOptions.first(),
-                options  = codecOptions,
-                onOptionSelected = { actions.setAudioCodec(it.key) },
-            )
-            // Show the AAC recommendation if the user has issues.
-            // LocalInspectionMode.current is true in Android Preview, it prevents a preview compilation error.
-            if (!LocalInspectionMode.current && audioCodec != ScrcpyAudioCodec.AAC.cliKey) {
-                HintText(stringResource(R.string.settings_audio_bitrate_recommendation))
-            }
-        }
-
-        val recommendedLabel = stringResource(R.string.general_recommended)
-        val bitrateOptions = AUDIO_BIT_RATE_OPTIONS
-            .map { bps ->
-                val kbpsLabel = stringResource(R.string.audio_bitrate_kbps, bps / 1000)
-                // 24 kbps is the recommended sweet spot for voice — flag it right in the dropdown.
-                val label = if (bps == RECOMMENDED_AUDIO_BIT_RATE) "$kbpsLabel ($recommendedLabel)" else kbpsLabel
-                OptionItem(bps.toString(), label)
-            }
-
-        DropdownRow {
-            M3DropdownField(
-                label    = stringResource(R.string.settings_audio_bitrate),
-                selected = bitrateOptions.find { it.key == savedBitRate.toString() }
-                    ?: bitrateOptions.first(), // fallback gracefully if bitrate was removed from expected options
-                options  = bitrateOptions,
-                onOptionSelected = { actions.setAudioBitRate(it.key.toInt()) }
-            )
-        }
-    }
-}
-
-/** Shows the theme and dynamic colour settings.
- *
- * @param preferences   The [AppPreferences] instance to read data from.
- * @param updateTrigger Trigger value to force recomposition when settings change.
- * @param actions       Implementation of [SettingsActions] to handle user interaction.
- */
-/**
- * **General** — the settings that are about the app itself rather than about a recording: how it
- * looks, what is switched on experimentally, and how it updates.
- *
- * These were three top-level accordions, which made Settings read as a flat list of everything
- * instead of having a shape. They keep their own section keys as sub-headers so nothing about the
- * user's stored state changes.
- */
-@Composable
-private fun GeneralSection(
-    preferences: AppPreferences,
-    updateTrigger: Int,
-    actions: SettingsActions,
-    expanded: Boolean,
-    onToggle: () -> Unit
-) {
-    // One open sub-section at a time, within this section only, and nothing open on entry.
-    var openSub by rememberSaveable { mutableStateOf<String?>(null) }
-
-    SettingsSection(
-        title = stringResource(R.string.settings_section_general),
-        expanded = expanded,
-        onToggle = onToggle,
-        wrapInCard = false,
-    ) {
-        SettingsSubSection(
-            title = stringResource(R.string.settings_section_visual),
-            expanded = openSub == SUB_VISUAL,
-            onToggle = { openSub = if (openSub == SUB_VISUAL) null else SUB_VISUAL },
-        ) { VisualSubSection(preferences, updateTrigger, actions) }
-        SettingsSubSection(
-            title = stringResource(R.string.settings_section_privacy),
-            expanded = openSub == SUB_PRIVACY,
-            onToggle = { openSub = if (openSub == SUB_PRIVACY) null else SUB_PRIVACY },
-        ) { PrivacySubSection(preferences, updateTrigger) }
-        SettingsSubSection(
-            title = stringResource(R.string.settings_section_experimental),
-            expanded = openSub == SUB_EXPERIMENTAL,
-            onToggle = { openSub = if (openSub == SUB_EXPERIMENTAL) null else SUB_EXPERIMENTAL },
-        ) { ExperimentalSubSection() }
-        SettingsSubSection(
-            title = stringResource(R.string.settings_section_updates),
-            expanded = openSub == SUB_UPDATES,
-            onToggle = { openSub = if (openSub == SUB_UPDATES) null else SUB_UPDATES },
-        ) { UpdatesSubSection(preferences, updateTrigger, actions) }
-    }
-}
-
-/**
- * The app lock, and for now nothing else.
- *
- * Its own sub-section rather than a row in Visual, because it is the first setting here that is about
- * who may *see* the app rather than how it looks, and because the next few privacy settings will want
- * somewhere obvious to go.
- */
-@Composable
-private fun PrivacySubSection(preferences: AppPreferences, updateTrigger: Int) {
-    val context = LocalContext.current
-    // Re-read on every settings change: the user may have gone to system Settings and added a screen
-    // lock precisely because this row told them to, and coming back to a still-disabled row would
-    // read as the app being wrong.
-    val available = remember(updateTrigger) { AppLock.isAvailable(context) }
-    var enabled by remember(updateTrigger) { mutableStateOf(preferences.isAppLockEnabled()) }
-
-    SettingsToggleRow(
-        label = stringResource(R.string.settings_app_lock_title),
-        checked = enabled && available,
-        onCheckedChange = {
-            enabled = it
-            preferences.setAppLockEnabled(it)
-        },
-        // Disabled rather than hidden when the phone has no screen lock: hiding it would leave
-        // someone looking for a feature they have read about with no idea why it is absent.
-        enabled = available,
-        description = stringResource(
-            if (available) R.string.settings_app_lock_description
-            else R.string.settings_app_lock_unavailable
-        ),
-        descriptionBelow = true,
-    )
-}
-
-@Composable
-private fun VisualSubSection(preferences: AppPreferences, updateTrigger: Int, actions: SettingsActions) {
-    val currentThemeMode = remember(updateTrigger) { preferences.getThemeMode() }
-    val isDynamicColorEnabled = remember(updateTrigger) { preferences.isDynamicColorEnabled() }
-    val isShowToastsEnabled = remember(updateTrigger) { preferences.isShowToastsEnabled() }
-    val isVibrationEnabled = remember(updateTrigger) { preferences.isVibrationEnabled() }
-    val context = LocalContext.current
-    val resources = LocalResources.current
-
-    // Read the current applied language without warnings
-    val currentLanguage = remember {
-        val currentLocales = AppCompatDelegate.getApplicationLocales()
-        if (currentLocales.isEmpty) "" else currentLocales[0]?.toLanguageTag() ?: ""
-    }
-
-    // Fetch available languages from dynamically generated XML resource file.
-    val languageOptions = remember(context) {
-        val options = mutableListOf(OptionItem("", resources.getString(R.string.settings_language_system)))
-
-        // Suppress the warning right here since AGP create this file dynamically at compile time
-        @SuppressLint("DiscouragedApi")
-        val resId = resources.getIdentifier("_generated_res_locale_config", "xml", context.packageName)
-
-        try {
-            val parser = resources.getXml(resId)
-            var eventType = parser.eventType
-
-            while (eventType != XmlPullParser.END_DOCUMENT) {
-                if (eventType == XmlPullParser.START_TAG && parser.name == "locale") {
-                    val localeName = parser.getAttributeValue("http://schemas.android.com/apk/res/android", "name")
-                    if (localeName != null) {
-                        val locale = Locale.forLanguageTag(localeName)
-                        val displayName = locale.getDisplayName(locale).replaceFirstChar {
-                            if (it.isLowerCase()) it.titlecase(locale) else it.toString()
-                        }
-                        options.add(OptionItem(localeName, displayName))
-                    }
-                }
-                eventType = parser.next()
-            }
-        } catch (_: Exception) {
-            options.add(OptionItem("en", "English (Provided as fallback)"))
-        }
-        options.distinctBy { it.key }
-    }
-
-    Column {
-        DropdownRow {
-            M3DropdownField(
-                label = stringResource(R.string.settings_language),
-                selected = languageOptions.find { it.key == currentLanguage } ?: languageOptions.first(),
-                options = languageOptions,
-                onOptionSelected = { actions.setAppLanguage(it.key) }
-            )
-        }
-
-        val themeOptions = AppPreferences.ThemeMode.entries.map { mode ->
-            val labelRes = when (mode) {
-                AppPreferences.ThemeMode.SYSTEM -> R.string.settings_theme_mode_system
-                AppPreferences.ThemeMode.LIGHT -> R.string.settings_theme_mode_light
-                AppPreferences.ThemeMode.DARK -> R.string.settings_theme_mode_dark
-            }
-            OptionItem(mode.key, stringResource(labelRes))
-        }
-        val defaultThemeMode = AppPreferences.DefaultsValue.THEME_MODE.key
-
-        DropdownRow {
-            M3DropdownField(
-                label    = stringResource(R.string.settings_theme_mode),
-                selected = themeOptions.find { it.key == currentThemeMode.key }
-                    ?: themeOptions.find { it.key == defaultThemeMode }
-                    ?: themeOptions.first(),
-                options  = themeOptions,
-                onOptionSelected = { actions.setThemeMode(AppPreferences.ThemeMode.fromKey(it.key)) }
-            )
-        }
-
-        SettingsDivider()
-
-        SettingsToggleRow(
-            icon            = Icons.Filled.ColorLens,
-            label           = stringResource(R.string.settings_dynamic_color),
-            checked         = isDynamicColorEnabled,
-            onCheckedChange = { actions.setDynamicColorEnabled(it) }
-        )
-        SettingsToggleRow(
-            icon            = Icons.Filled.NotificationsActive,
-            label           = stringResource(R.string.settings_show_toasts),
-            checked         = isShowToastsEnabled,
-            onCheckedChange = { actions.setShowToastsEnabled(it) }
-        )
-        SettingsToggleRow(
-            icon            = Icons.Filled.Vibration,
-            label           = stringResource(R.string.settings_vibration_enabled),
-            checked         = isVibrationEnabled,
-            onCheckedChange = { actions.setVibrationEnabled(it) }
-        )
-    }
-}
-
-/**
- * Debug section (always visible). The flow is: turn logging on, reproduce the issue, turn logging
- * off, then share the captured log.
- *
- * - While logging is **on**, we show a red reminder to turn it back off; sharing is intentionally
- *   hidden so the user isn't sharing a log that is still being written to.
- * - While logging is **off**, the Share button appears only if a valid (non-empty) log file from a
- *   previous session still exists — there is nothing to share otherwise.
- *
- * Logs stay redacted (phone numbers masked). Each time logging is turned on the previous capture is
- * cleared (see [SettingsViewModel.setLoggingEnabled]) so every report is a fresh, focused log.
- *
- * @param preferences   The [AppPreferences] instance to read data from.
- * @param updateTrigger Trigger value to force recomposition when settings change.
- * @param actions       Implementation of [SettingsActions] to handle user interaction.
- * @param onShareLogs   Called to share the diagnostic log report via the system share-sheet.
- * @param onSaveLogs    Called to save the diagnostic log report to a file the user picks.
- */
-@Composable
-private fun BugReportSection(
-    preferences: AppPreferences,
-    updateTrigger: Int,
-    actions: SettingsActions,
-    onShareLogs: () -> Unit,
-    onSaveLogs: () -> Unit,
-    expanded: Boolean,
-    onToggle: () -> Unit
-) {
-    val isLoggingEnabled = remember(updateTrigger) { preferences.isLoggingEnabled() }
-    // Re-checked on every settings change (e.g. right after the toggle flips off) so the Share
-    // button appears as soon as a capture is frozen on disk.
-    val hasLogs = remember(updateTrigger) { AppLogger.hasLogs() }
-    // The setup journal is written whether or not logging was ever switched on, so everything below
-    // — sharing it, reading it, deleting it — has to be reachable without the opt-in log existing.
-    // Gating on the opt-in log alone hid the journal on exactly the phones it is written for.
-    val hasAnyDiagnostics = remember(updateTrigger) { AppLogger.hasAnyDiagnostics() }
-    val logSize = remember(updateTrigger) { AppLogger.logSizeBytes() + AppLogger.setupJournalSizeBytes() }
-    val hasJournal = remember(updateTrigger) { AppLogger.hasSetupJournal() }
-    // Saveable: rotating the phone recreates the screen, and a plain remember closed the viewer mid-read.
-    var showLogViewer by rememberSaveable { mutableStateOf(false) }
-    var confirmClearLog by remember { mutableStateOf(false) }
-
-    SettingsSection(title = stringResource(R.string.settings_section_debug), expanded = expanded, onToggle = onToggle) {
-        SettingsToggleRow(
-            icon            = Icons.Filled.BugReport,
-            label           = stringResource(R.string.settings_debug_logging_enabled),
-            checked         = isLoggingEnabled,
-            onCheckedChange = { actions.setLoggingEnabled(it) },
-            description     = stringResource(R.string.settings_debug_logging_enabled_description)
-        )
-
-        if (isLoggingEnabled) {
-            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-                Text(
-                    text = stringResource(R.string.settings_bugreport_active_warning),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.error
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-            }
-        } else {
-            // Offered whenever logging is off, with no precondition on there being a log: the report
-            // always carries the configuration header, and the setup journal when there is one. The
-            // old gate asked for a log file first, so the maintainer had to switch logging on and off
-            // again just to reach Share — for a report whose useful half needed neither.
-            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-                Text(
-                    text = stringResource(R.string.settings_bugreport_share_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Side by side: Share hands the report to another app, Save writes it to a file on the phone.
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // Both teal: two equal ways to get the same report out. Cv buttons, because a plain Button
-                    // is shorter than they are and the row sat uneven.
-                    CvPrimaryButton(
-                        text = stringResource(R.string.settings_bugreport_share),
-                        onClick = onShareLogs,
-                        modifier = Modifier.weight(1f),
-                    )
-                    CvPrimaryButton(
-                        text = stringResource(R.string.settings_bugreport_save),
-                        onClick = onSaveLogs,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-            }
-        }
-
-        // The log file itself — visible whether or not logging is currently running. Until now the
-        // file was invisible and the only way to clear it was to toggle logging off and on again,
-        // which is a side effect nobody would guess at.
-        if (hasAnyDiagnostics) {
-            SettingsDivider()
-            NavigationRow(
-                icon = Icons.AutoMirrored.Filled.ListAlt,
-                label = stringResource(R.string.settings_debug_log_file),
-                value = formatByteSize(logSize),
-                supporting = if (hasJournal) stringResource(R.string.settings_debug_journal_hint)
-                else stringResource(R.string.settings_debug_log_view_hint),
-                onClick = { showLogViewer = true }
-            )
-            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-                // Red: this row only exists while there is a log or journal on disk, so the button always
-                // removes something real.
-                CvDestructiveButton(
-                    text = stringResource(R.string.settings_debug_log_delete),
-                    onClick = { confirmClearLog = true },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-            }
-        }
-    }
-
-    if (showLogViewer) {
-        DebugLogViewer(onDismiss = { showLogViewer = false })
-    }
-
-    if (confirmClearLog) {
-        AlertDialog(
-            onDismissRequest = { confirmClearLog = false },
-            title = { Text(stringResource(R.string.settings_debug_log_delete_title)) },
-            text = { Text(stringResource(R.string.settings_debug_log_delete_message)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmClearLog = false
-                    AppLogger.clearLogs()
-                    // The host keeps its own copy in memory; deleting only the app's half would let
-                    // lines the user thought they erased reappear in the next report.
-                    RecorderBackend.clearHostDiagnostics()
-                    // Logging may still be running, so the file is recreated immediately and empty.
-                    // Refreshing re-reads hasLogs/size rather than leaving a stale figure on screen.
-                    actions.refreshSettings()
-                }) { Text(stringResource(R.string.settings_debug_log_delete)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmClearLog = false }) {
-                    Text(stringResource(R.string.general_cancel))
-                }
-            },
-        )
-    }
-}
-
-/** How much of the log the in-app viewer shows. The file self-trims at 1000 lines. */
-private const val LOG_VIEW_LINES = 500
-
-/**
- * Reads the tail of the debug log into a full-screen page.
- *
- * It used to be a small popup that cut every line off at the right edge, scrolled in both directions with no sign it
- * could, and closed when the phone was rotated (seen on the OP9 on 2026-09-11, while checking mirror176's log
- * feedback in #28 and #29). Now it fills the
- * screen, wraps lines by default with a switch to scroll sideways instead, shows scrollbars, and opens at the newest
- * lines — the end is what someone opens a log to read.
- */
-@Composable
-private fun DebugLogViewer(onDismiss: () -> Unit) {
-    var text by remember { mutableStateOf<String?>(null) }
-    var loaded by remember { mutableStateOf(false) }
-    var wrap by rememberSaveable { mutableStateOf(true) }
-    // Once per opening: jumping to the end again after a rotation would throw away where the reader had scrolled to.
-    var openedAtEnd by rememberSaveable { mutableStateOf(false) }
-    val vertical = rememberScrollState()
-    val horizontal = rememberScrollState()
-
-    LaunchedEffect(Unit) {
-        text = withContext(Dispatchers.IO) { AppLogger.readTail(LOG_VIEW_LINES) }
-        loaded = true
-    }
-
-    LaunchedEffect(loaded) {
-        if (!loaded || openedAtEnd) return@LaunchedEffect
-        // maxValue is Int.MAX_VALUE until the text is laid out, and 0 when it all fits.
-        val end = snapshotFlow { vertical.maxValue }.first { it != Int.MAX_VALUE }
-        if (end > 0) vertical.scrollTo(end)
-        openedAtEnd = true
-    }
-
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 4.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    IconButton(onClick = onDismiss) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.general_close),
-                        )
-                    }
-                    Text(
-                        text = stringResource(R.string.settings_debug_log_file),
-                        style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        text = stringResource(R.string.settings_debug_log_wrap),
-                        style = MaterialTheme.typography.labelLarge,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Switch(checked = wrap, onCheckedChange = { wrap = it })
-                }
-                HorizontalDivider()
-                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    val content = text
-                    when {
-                        !loaded -> CircularProgressIndicator(
-                            modifier = Modifier.align(Alignment.Center),
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        content.isNullOrBlank() -> Text(
-                            text = stringResource(R.string.settings_debug_log_empty),
-                            modifier = Modifier.align(Alignment.Center).padding(24.dp),
-                        )
-                        else -> {
-                            val barColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
-                            Text(
-                                text = content,
-                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                                softWrap = wrap,
-                                // Scrollbars before the scrolls, so they are drawn at the size of the visible area.
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .verticalScrollbar(vertical, barColor)
-                                    .then(if (wrap) Modifier else Modifier.horizontalScrollbar(horizontal, barColor))
-                                    .verticalScroll(vertical)
-                                    .then(if (wrap) Modifier else Modifier.horizontalScroll(horizontal))
-                                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * "Reliability" — controls that keep recording working in tricky conditions: recording without Wi-Fi
- * (loopback opt-in) and the Default USB Configuration that stops a screen-lock from killing the recorder
- * mid-call. Grouped together so users have one place to make recording robust.
- */
-@Composable
-private fun ExperimentalSubSection() {
-    Column {
-        SettingsSubHeader(stringResource(R.string.settings_subsection_resilience), nested = true)
-        HandoffPersistToggle()
-        SettingsDivider()
-        OfflineRecordingToggle()
-        SettingsDivider()
-        UsbDebuggingToggle()
-        SettingsDivider()
-        WirelessDebuggingEnforceToggle()
-        SettingsDivider()
-        UsbDefaultConfigRow()
-        PairAgainRow()
-
-        SettingsSubHeader(stringResource(R.string.settings_subsection_voip), nested = true)
-        VoipRecordingToggle()
-    }
-}
-
 /** One-line status under a settings row (arming progress, or why something is unavailable). */
 @Composable
 private fun SettingsHint(text: String) {
@@ -2696,76 +1106,41 @@ private fun VoipAppPicker(prefs: AppPreferences) {
 }
 
 /**
- * Owner phone policy, read-only. Shows the server-synced phone
- * NUMBER (the stable owner identity) with the SIM slot it is
- * currently detected on — or "Configured number not detected" /
- * "No phone number configured" with recording disabled. The
- * mapping is recomputed from the live subscription list on every
- * composition via [PhoneNumberResolver] (primary
- * `SubscriptionInfo.getNumber`, fallback `getPhoneNumber`), so a
- * SIM moved to another slot is picked up with no reconfiguration.
- * No controls: the salesperson cannot change this.
- *
- * The displayed line is the CONFIGURED number, never the remote
- * caller of any call — per-call remote numbers are labelled
- * separately wherever they appear.
+ * Owner phone policy, read-only. Shows the Owner-assigned number and whether the
+ * Owner enabled phone recording. No controls: the salesperson cannot change this.
+ * The displayed line is the CONFIGURED number, never the remote caller of any call.
  */
 @Composable
 private fun PhonePolicyStatus(preferences: AppPreferences, updateTrigger: Int) {
+    // Observable Owner policy: every successful sync publishes, so this open
+    // screen recomposes with the new number/status automatically. The direct
+    // prefs reads are only the first-frame fallback before the first publish
+    // lands in this process. `updateTrigger` is kept for call-site compat.
     val context = LocalContext.current
-    var sims by remember { mutableStateOf<List<SimInfo>?>(null) }
-    val configuredNumber = remember(updateTrigger) { preferences.getPhoneRecordingNumber() }
-
+    val policy by WhatsappSourceSync.policyFlow.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) {
-        sims = withContext(Dispatchers.IO) { SimSubscriptions.list(context) }
+        withContext(Dispatchers.IO) { WhatsappSourceSync.publishCurrent(context) }
     }
-
-    val matchedId = sims?.let { PhoneNumberResolver.resolveSubscriptionId(configuredNumber, it) }
-    val matchedSim = sims?.firstOrNull { it.subscriptionId == matchedId }
+    val fallbackNumber = remember { preferences.getPhoneRecordingNumber() }
+    val configuredNumber = policy?.phoneNumber ?: fallbackNumber
 
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         Text(
-            text = stringResource(R.string.settings_phone_calls_label),
+            text = stringResource(R.string.settings_phone_recording_title),
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.secondary
         )
         Spacer(modifier = Modifier.height(4.dp))
-        if (configuredNumber.isNullOrBlank()) {
-            StatusLine(
-                text = stringResource(R.string.settings_phone_number_not_configured),
-                state = PolicyState.DISABLED
-            )
-        } else {
-            Text(
-                text = PhoneNumberResolver.formatForDisplay(configuredNumber),
-                style = MaterialTheme.typography.bodyMedium
-            )
-            if (sims == null) {
-                // Still enumerating; the configured number above is already shown.
-            } else if (matchedSim == null) {
-                StatusLine(
-                    text = stringResource(R.string.settings_configured_number_not_detected),
-                    state = PolicyState.UNAVAILABLE
-                )
-                StatusLine(
-                    text = stringResource(R.string.settings_policy_disabled),
-                    state = PolicyState.DISABLED
-                )
-            } else {
-                val slot = matchedSim.slotIndex + 1
-                Text(
-                    text = stringResource(R.string.settings_sim_slot, slot),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                StatusLine(
-                    text = stringResource(R.string.settings_policy_enabled),
-                    state = PolicyState.ENABLED
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(4.dp))
-        SettingsHint(stringResource(R.string.settings_managed_by_whatsapp_max))
+        Text(
+            text = stringResource(R.string.settings_assigned_number_label),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = if (configuredNumber.isNullOrBlank()) stringResource(R.string.settings_owner_not_configured)
+            else PhoneNumberResolver.formatForDisplay(configuredNumber),
+            style = MaterialTheme.typography.bodyMedium
+        )
     }
 }
 
@@ -2788,79 +1163,48 @@ private fun StatusLine(text: String, state: PolicyState) {
 
 
 /**
- * Owner WhatsApp policy, read-only. Shows the server-synced source
- * (None / WhatsApp / WhatsApp Business) and whether it currently
- * authorizes recording. No controls: the salesperson cannot change
- * this. The app name is shown — never a phone number, because no
- * reliable WhatsApp number exists.
- *
- * When a both-toggles migration left the choice ambiguous, a
- * blocking one-time prompt forces the explicit pick (effective
- * source stays none until then — never silently both).
+ * Owner WhatsApp policy, read-only. Shows the Owner-selected application
+ * (None / WhatsApp / WhatsApp Business). No controls, no migration dialog:
+ * the salesperson cannot change the Owner's selection here — a synced value
+ * always wins, and this screen never writes it. Management happens in
+ * WhatsApp Max.
  */
 @Composable
 private fun WhatsappSourceStatus(
     prefs: AppPreferences,
     updateTrigger: Int,
 ) {
-    var source by remember(updateTrigger) { mutableStateOf(prefs.getWhatsappRecordingSource()) }
-    var showMigration by remember(updateTrigger) {
-        mutableStateOf(prefs.isWhatsappSourceMigrationRequired())
+    // Same observable policy as PhonePolicyStatus: recomposes automatically
+    // after every successful sync. Direct prefs reads are first-frame
+    // fallback only.
+    val context = LocalContext.current
+    val policy by WhatsappSourceSync.policyFlow.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { WhatsappSourceSync.publishCurrent(context) }
     }
-
-    fun pick(next: WhatsappRecordingSource) {
-        source = next
-        prefs.setWhatsappRecordingSource(next)
-        prefs.setWhatsappSourceMigrationRequired(false)
-        showMigration = false
-    }
+    val source = policy?.whatsapp ?: remember { prefs.getWhatsappRecordingSource() }
+    val configured = policy?.phoneConfigured ?: remember { prefs.isPhoneRecordingConfigured() }
 
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         Text(
-            text = stringResource(R.string.settings_whatsapp_calls_label),
+            text = stringResource(R.string.settings_whatsapp_recording_title),
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.secondary
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = when (source) {
+            text = stringResource(R.string.settings_selected_app_label),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = if (!configured) stringResource(R.string.settings_owner_not_configured)
+            else when (source) {
                 WhatsappRecordingSource.NONE -> stringResource(R.string.settings_whatsapp_source_none)
                 WhatsappRecordingSource.WHATSAPP -> stringResource(R.string.settings_whatsapp_source_whatsapp)
                 WhatsappRecordingSource.WHATSAPP_BUSINESS -> stringResource(R.string.settings_whatsapp_source_business)
             },
             style = MaterialTheme.typography.bodyMedium
-        )
-        StatusLine(
-            text = stringResource(
-                if (source == WhatsappRecordingSource.NONE) R.string.settings_policy_disabled
-                else R.string.settings_policy_enabled
-            ),
-            state = if (source == WhatsappRecordingSource.NONE) PolicyState.DISABLED else PolicyState.ENABLED
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        SettingsHint(stringResource(R.string.settings_managed_by_whatsapp_max))
-    }
-
-    if (showMigration) {
-        AlertDialog(
-            // No dismiss: both legacy toggles were ON, so there is no safe
-            // default to fall back to — the user must pick explicitly.
-            onDismissRequest = { },
-            title = { Text(stringResource(R.string.settings_whatsapp_migration_title)) },
-            text = { Text(stringResource(R.string.settings_whatsapp_migration_message)) },
-            confirmButton = {
-                Column {
-                    TextButton(onClick = { pick(WhatsappRecordingSource.NONE) }) {
-                        Text(stringResource(R.string.settings_whatsapp_source_none))
-                    }
-                    TextButton(onClick = { pick(WhatsappRecordingSource.WHATSAPP) }) {
-                        Text(stringResource(R.string.settings_whatsapp_source_whatsapp))
-                    }
-                    TextButton(onClick = { pick(WhatsappRecordingSource.WHATSAPP_BUSINESS) }) {
-                        Text(stringResource(R.string.settings_whatsapp_source_business))
-                    }
-                }
-            },
         )
     }
 }
@@ -3079,232 +1423,36 @@ internal fun WirelessDebuggingEnforceToggle() {
 }
 
 /**
- * Pairs CallVault with Wireless debugging again, from anywhere, without reinstalling (issue #43).
+ * Shared USB-debugging actions for the offline-recording flows: open Developer Options,
+ * re-check the live switch, and (only where the switch is unreadable) continue anyway.
  *
- * Before this row the pairing flow lived only in onboarding, so when Android forgot the pairing the
- * reporter's only way back was to uninstall — losing settings along the way. It runs the same flow as
- * setup (the notification that takes the code) and opens Wireless debugging's page, where "Pair device
- * with pairing code" is. Recordings and settings are untouched. Built-in mode only: Shizuku pairs itself.
+ * The arm itself verifies the listener, so Continue is never a blind bypass — it just hands
+ * an ambiguous switch to the component that can actually test it.
  */
 @Composable
-private fun PairAgainRow() {
-    val context = LocalContext.current
-    if (!capabilityAvailable(ModeCapability.WIRELESS_DEBUGGING_CONTROL)) return
-    SettingsDivider()
-    NavigationRow(
-        icon = Icons.Filled.Wifi,
-        label = stringResource(R.string.settings_pair_again_label),
-        value = stringResource(R.string.settings_pair_again_value),
-        supporting = stringResource(R.string.settings_pair_again_hint),
-        onClick = {
-            AdbPairingService.start(context)
-            context.openWirelessDebugging()
-        },
-    )
-}
-
-@Composable
-private fun UsbDebuggingToggle() {
-    val context = LocalContext.current
-    var enabled by remember { mutableStateOf(AdbShell.usbDebuggingState(context).isOn) }
-    var failed by remember { mutableStateOf(false) }
-    // Follow the real setting, not just our own taps: it is changed from Developer options, by Android
-    // itself, and by recovery — and a switch showing "on" while USB debugging is off offers the wrong move.
-    //
-    // But only a PROVEN reading may move it. On a build that redacts `adb_enabled` (Android 17) the
-    // read-back after our own successful write returns 0, so this observer used to flip the switch
-    // straight back off in front of the user — the write had worked, and the app said it had not. An
-    // unprovable reading now leaves the switch where it is, which for a tap the user just made is the
-    // value they chose, and for a passive refresh is the last thing we actually knew.
-    DisposableEffect(context) {
-        val observer = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
-            override fun onChange(selfChange: Boolean) {
-                when (AdbShell.usbDebuggingState(context)) {
-                    UsbDebuggingState.ON -> enabled = true
-                    UsbDebuggingState.OFF -> enabled = false
-                    UsbDebuggingState.UNKNOWN -> Unit
-                }
+private fun UsbGateActions(
+    showContinue: Boolean,
+    onOpenDeveloperOptions: () -> Unit,
+    onCheckAgain: () -> Unit,
+    onContinue: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TextButton(onClick = onOpenDeveloperOptions) {
+            Text(stringResource(R.string.oem_gate_open_dev_options))
+        }
+        TextButton(onClick = onCheckAgain) {
+            Text(stringResource(R.string.settings_wacrm_auto_open_recheck))
+        }
+        if (showContinue) {
+            TextButton(onClick = onContinue) {
+                Text(stringResource(R.string.general_continue))
             }
         }
-        runCatching {
-            context.contentResolver.registerContentObserver(Settings.Global.getUriFor("adb_enabled"), false, observer)
-        }
-        onDispose { runCatching { context.contentResolver.unregisterContentObserver(observer) } }
     }
-    // The cost of switching it off, while the user decides; null when no question is open.
-    var pendingOff by remember { mutableStateOf<UsbDebuggingOff?>(null) }
-    val writeUsbDebugging: (Boolean) -> Unit = { turnOn ->
-        val ok = runCatching {
-            Settings.Global.putInt(context.contentResolver, "adb_enabled", if (turnOn) 1 else 0)
-        }.isSuccess
-        failed = !ok
-        if (ok) enabled = turnOn
-    }
-    // Shizuku's server is a shell-uid process hosted by adbd, so turning USB debugging off takes it
-    // down with adbd — the same mechanism measured for the Default USB Configuration on 2026-09-05
-    // (issue #28g). This row also recommends turning it ON, which is advice for the embedded-ADB
-    // backend and means nothing to a Shizuku user. Locked, with the reason, rather than hidden: it
-    // still reports the true state, and a control that quietly vanishes teaches nothing.
-    val usesEmbeddedAdb = remember { !AppPreferences(context).getPrivilegedMode().needsShizuku }
-
-    SettingsToggleRow(
-        icon = Icons.Filled.Usb,
-        label = stringResource(R.string.settings_usb_debugging_label),
-        description = stringResource(R.string.settings_usb_debugging_description),
-        checked = enabled,
-        enabled = usesEmbeddedAdb,
-        onCheckedChange = { turnOn ->
-            // Say what turning it off costs BEFORE the switch moves. AOSP stops adbd when both debugging
-            // flags are off and clears Wireless debugging itself off Wi-Fi, so this toggle could leave the
-            // recorder with no way back in — #39 sat on "starting up" after doing exactly this.
-            val cost = UsbDebuggingOffGuard.decide(
-                turnOn = turnOn,
-                offlineRecordingOn = AppPreferences(context).isOfflineRecordingEnabled(),
-                wifi = WifiState.of(context),
-            )
-            if (cost == UsbDebuggingOff.PROCEED) writeUsbDebugging(turnOn) else pendingOff = cost
-        },
-    )
-    pendingOff?.let { cost ->
-        AlertDialog(
-            onDismissRequest = { pendingOff = null },
-            // Tinted explicitly: the dialog's default icon colour resolves to coral in this app's scheme.
-            icon = { Icon(imageVector = Icons.Filled.Usb, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-            title = { Text(stringResource(R.string.usb_debugging_off_warn_title)) },
-            text = {
-                Text(
-                    stringResource(
-                        if (cost == UsbDebuggingOff.WARN_NO_WAY_IN) R.string.usb_debugging_off_warn_no_way_in
-                        else R.string.usb_debugging_off_warn_offline,
-                    ),
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { pendingOff = null }) {
-                    Text(stringResource(R.string.usb_debugging_off_keep))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    pendingOff = null
-                    writeUsbDebugging(false)
-                }) {
-                    Text(stringResource(R.string.usb_debugging_off_confirm))
-                }
-            },
-        )
-    }
-    when {
-        !usesEmbeddedAdb -> SettingsHint(stringResource(R.string.settings_usb_debugging_shizuku_hint))
-        failed -> SettingsHint(stringResource(R.string.settings_usb_debugging_failed))
-        enabled -> SettingsHint(stringResource(R.string.settings_usb_debugging_on_hint))
-        else -> SettingsHint(stringResource(R.string.settings_usb_debugging_recommended))
-    }
-}
-
-/**
- * Lets the user pick the device's **Default USB Configuration** (what USB does when the screen unlocks)
- * from inside the app, applied over the embedded ADB shell. **"Charging only" is recommended**: on many
- * OEMs a data default (File transfer, etc.) makes the USB gadget renegotiate on every screen on/off,
- * restarting adbd and killing the recorder daemon — which stops a recording if you lock the phone
- * mid-call. The other modes are offered for people who rely on them (e.g. USB tethering); picking one
- * just trades that reliability. Reads the live value on open (falls back to the cached value), and shows
- * a spinner-style "applying" hint while the shell command runs.
- */
-@Composable
-private fun UsbDefaultConfigRow() {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var mode by remember { mutableStateOf(UsbDefaultConfig.cached(context)) }
-    var applying by remember { mutableStateOf(false) }
-    var refusedWhileRecording by remember { mutableStateOf(false) }
-    val privilegedMode = remember { AppPreferences(context).getPrivilegedMode() }
-
-    // The nudge is pure embedded-ADB machinery — reading it needs our shell, and applying it needs the
-    // shell privilege. Greyed in Shizuku mode for the same reason the offline toggle is: it would look
-    // as if it had worked and change nothing.
-    val supported = capabilityAvailable(ModeCapability.WIRELESS_DEBUGGING_CONTROL)
-
-    // Refresh the live value once when shown (readViaShell connects+retries internally); falls back to
-    // the shown cached value on failure. Not even attempted when unsupported: readViaShell now refuses
-    // it anyway, but a probe nobody can act on has no business spending a coroutine either.
-    LaunchedEffect(supported) {
-        if (!supported) return@LaunchedEffect
-        withContext(Dispatchers.IO) { UsbDefaultConfig.readViaShell(context) }?.let { mode = it }
-    }
-
-    val recommendedLabel = stringResource(R.string.general_recommended)
-    // Nothing is "recommended" here in Shizuku mode. Changing the Default USB Configuration restarts
-    // adbd, and Shizuku's server — a shell-uid process hosted by it — dies with it. Measured on the OP9,
-    // 2026-09-05: one change, adbd came back with a new pid, shizuku_server was gone and stayed gone.
-    // Issue #28's reporter hit exactly this and read our label as advice. See [UsbDefaultConfigRow].
-    val options = UsbDefaultConfig.SELECTABLE.map { m ->
-        val base = stringResource(usbModeLabelRes(m))
-        OptionItem(m.name, if (supported && m == UsbDefaultConfig.RECOMMENDED) "$base ($recommendedLabel)" else base)
-    }
-    // When the current value is UNKNOWN (never read), don't force a wrong selection — show recommended.
-    val selected = options.find { it.key == mode.name } ?: options.first()
-
-    DropdownRow {
-        M3DropdownField(
-            label = stringResource(R.string.settings_usb_default_label),
-            selected = selected,
-            options = options,
-            enabled = supported && !applying,
-            onOptionSelected = { opt ->
-                val target = runCatching { UsbDefaultMode.valueOf(opt.key) }.getOrNull() ?: return@M3DropdownField
-                if (target == mode || applying) return@M3DropdownField
-                applying = true
-                scope.launch {
-                    val result = withContext(Dispatchers.IO) { UsbDefaultConfig.setViaShell(context, target) }
-                    refusedWhileRecording = result == UsbSetResult.BUSY_RECORDING
-                    if (result == UsbSetResult.APPLIED) mode = target
-                    applying = false
-                }
-            },
-        )
-        // While the change is being applied + verified, grey the field (above) and show a live spinner,
-        // so the (few-second) delay before the value updates can't be mistaken for "nothing happened".
-        if (applying) {
-            Row(
-                modifier = Modifier.padding(start = 16.dp, top = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = stringResource(R.string.settings_usb_default_applying),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        } else if (refusedWhileRecording) {
-            HintText(stringResource(R.string.settings_usb_default_busy))
-        } else {
-            HintText(
-                when {
-                    // The Shizuku answer is not "you cannot change this here" but "do not change this
-                    // at all, including from system Settings" — which is what the reporter did.
-                    !supported && privilegedMode.needsShizuku ->
-                        stringResource(R.string.settings_usb_default_shizuku_hint)
-                    else -> unavailableReason(ModeCapability.WIRELESS_DEBUGGING_CONTROL)
-                        ?: stringResource(R.string.settings_usb_default_hint)
-                }
-            )
-        }
-    }
-}
-
-/** Maps a [UsbDefaultMode] to its user-facing label string resource. */
-@StringRes
-private fun usbModeLabelRes(mode: UsbDefaultMode): Int = when (mode) {
-    UsbDefaultMode.CHARGING -> R.string.usb_mode_charging
-    UsbDefaultMode.DEBUGGING_ONLY -> R.string.usb_mode_debugging_only
-    UsbDefaultMode.FILE_TRANSFER -> R.string.usb_mode_file_transfer
-    UsbDefaultMode.PTP -> R.string.usb_mode_ptp
-    UsbDefaultMode.TETHERING -> R.string.usb_mode_tethering
-    UsbDefaultMode.MIDI -> R.string.usb_mode_midi
-    UsbDefaultMode.UNKNOWN -> R.string.usb_mode_charging
 }
 
 /**
@@ -3324,6 +1472,15 @@ internal fun OfflineRecordingToggle() {
     var enabled by remember { mutableStateOf(prefs.isOfflineRecordingEnabled()) }
     // Non-null while the enable/disable dialog is walking the user through the ADB work with live feedback.
     var dialogMode by remember { mutableStateOf<OfflineDialogMode?>(null) }
+    // One-time USB onboarding gate: turning offline recording on with USB debugging off can
+    // never arm the listener, so the toggle explains the requirement first instead of failing
+    // in the arming dialog. Unknown (unreadable) states get their own copy — never a claim
+    // that the switch is off — and an explicit Continue that lets the verified arm decide.
+    var usbGateOpen by remember { mutableStateOf(false) }
+    var usbRecheckTick by remember { mutableIntStateOf(0) }
+    // Live state, re-read on every gate open and every explicit Check again — never cached
+    // across sessions, and never a substitute for the persisted onboarding flag below.
+    val usbGateState = remember(usbRecheckTick) { AdbShell.usbDebuggingState(context) }
 
     // Pure embedded-ADB machinery, and Shizuku mode has no embedded ADB connection at all. The switch
     // was already turned off on entering that mode, but it stayed tappable — so it could be turned back
@@ -3336,11 +1493,79 @@ internal fun OfflineRecordingToggle() {
         description = unavailableReason(ModeCapability.OFFLINE_RECORDING)
             ?: stringResource(R.string.settings_offline_recording_desc),
         checked = enabled && supported,
-        enabled = supported && dialogMode == null,
+        enabled = supported && dialogMode == null && !usbGateOpen,
         onCheckedChange = { turnOn ->
-            dialogMode = if (turnOn) OfflineDialogMode.ENABLE else OfflineDialogMode.DISABLE
+            if (!turnOn) {
+                usbGateOpen = false
+                dialogMode = OfflineDialogMode.DISABLE
+            } else if (AdbShell.usbDebuggingState(context).isOn) {
+                dialogMode = OfflineDialogMode.ENABLE
+            } else {
+                // Proven off or unreadable: explain first. The actual USB state was just read;
+                // usbGateState (keyed on usbRecheckTick) re-reads on every explicit Check again.
+                usbRecheckTick++
+                usbGateOpen = true
+            }
         },
     )
+
+    // Standalone-only USB gate. Shizuku mode never reaches it (the row above is disabled there).
+    if (usbGateOpen && supported) {
+        val firstTime = !prefs.isUsbOnboardingCompleted()
+        CvCard(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)) {
+            Text(
+                text = stringResource(R.string.usb_onboarding_title),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = stringResource(
+                    when {
+                        usbGateState.isOff && !firstTime -> R.string.usb_onboarding_reenable_desc
+                        usbGateState.isOff -> R.string.usb_onboarding_desc
+                        else -> R.string.usb_onboarding_unverified_desc
+                    }
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            UsbGateActions(
+                showContinue = !usbGateState.isOn && !usbGateState.isOff,
+                onOpenDeveloperOptions = { context.openDeveloperSettings() },
+                onCheckAgain = {
+                    // Re-read the live switch: returning from Developer Options is the moment it
+                    // may have flipped. On means the requirement is met — continue straight into
+                    // the normal verified setup.
+                    if (AdbShell.usbDebuggingState(context).isOn) {
+                        usbGateOpen = false
+                        dialogMode = OfflineDialogMode.ENABLE
+                    } else {
+                        usbRecheckTick++
+                    }
+                },
+                onContinue = {
+                    usbGateOpen = false
+                    dialogMode = OfflineDialogMode.ENABLE
+                },
+            )
+        }
+    }
+
+    // Runtime recovery, separate from the one-time gate above: USB debugging was on when offline
+    // recording was set up and is now proven off. Recording will resume by itself when it comes
+    // back, but the row says so and offers the one-tap route — the keepalive notice alone is
+    // easy to miss. Check again re-reads rather than trusting a stale composition.
+    if (enabled && supported && usbGateState.isOff) {
+        SettingsHint(stringResource(R.string.usb_onboarding_reenable_desc))
+        UsbGateActions(
+            showContinue = false,
+            onOpenDeveloperOptions = { context.openDeveloperSettings() },
+            onCheckAgain = { usbRecheckTick++ },
+            onContinue = {},
+        )
+    }
 
     // Stated up front, and only to the people it applies to. The listener does not survive a reboot
     // and cannot be re-armed until the phone associates with Wi-Fi once — four escapes were tested
@@ -3360,77 +1585,6 @@ internal fun OfflineRecordingToggle() {
     }
 }
 
-/** Shows the app version, server version, clipboard buttons, and a GitHub link.
- *
- * @param versionString         The formatted app-version string to display.
- * @param onShowLicenses        Called when the user taps "View Licenses".
- */
-@Composable
-private fun AboutSection(
-    versionString: String,
-    onShowLicenses: () -> Unit,
-    expanded: Boolean,
-    onToggle: () -> Unit
-) {
-    val context = LocalContext.current
-    val serverVersion = ScrcpyConfig.SCRCPY_VERSION
-    var showSupportDialog by remember { mutableStateOf(false) }
-
-    if (showSupportDialog) {
-        SupportDialog(onDismiss = { showSupportDialog = false })
-    }
-
-    SettingsSection(title = stringResource(R.string.settings_section_about), expanded = expanded, onToggle = onToggle) {
-        NavigationRow(
-            icon = Icons.Filled.Save,
-            label = stringResource(R.string.settings_ui_about_app),
-            value = versionString,
-            supporting = stringResource(R.string.settings_scrcpy_server, serverVersion),
-            showChevron = false
-        )
-
-        SettingsDivider()
-
-        // Required fork attribution under the upstream license (GPLv3 §7). Opens the upstream repo.
-        NavigationRow(
-            icon = Icons.Filled.Gavel,
-            label = stringResource(R.string.settings_fork_attribution),
-            value = stringResource(R.string.settings_fork_attribution_supporting),
-            supporting = stringResource(R.string.settings_ui_open_repo_hint),
-            onClick = { context.openOriginalProjectRepo() }
-        )
-
-        SettingsDivider()
-
-        // Optional "support development" link. Offers Ko-fi and PayPal; both open in the browser.
-        NavigationRow(
-            icon = Icons.Filled.Favorite,
-            label = stringResource(R.string.settings_support_label),
-            value = stringResource(R.string.settings_support_value),
-            supporting = stringResource(R.string.settings_support_supporting),
-            onClick = { showSupportDialog = true }
-        )
-
-        Row(
-            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            CvSecondaryButton(
-                text = stringResource(R.string.settings_copy_version),
-                onClick = { context.copyToClipboard("Scrcpy-Server Version", ScrcpyConfig.SCRCPY_VERSION) },
-                leadingIcon = Icons.Filled.ContentCopy,
-                modifier = Modifier.weight(1f)
-            )
-            CvSecondaryButton(
-                text = stringResource(R.string.settings_view_licenses),
-                onClick = onShowLicenses,
-                leadingIcon = Icons.Filled.Gavel,
-                modifier = Modifier.weight(1f)
-            )
-        }
-    }
-}
-
 // ── Internal helper composables ────────────────────────────────────────────────────────────
 
 /** A branded, collapsible section: a tappable [CvSectionHeader] (with a rotating chevron) above a
@@ -3443,28 +1597,6 @@ private fun AboutSection(
  * @param onToggle Invoked when the header is tapped (the parent decides the new open-section).
  * @param content  The slot for child rows rendered inside the [CvCard] when expanded.
  */
-/**
- * In-app updates: a daily release check (on by default). A new release surfaces as a notification +
- * Home banner, and installs only on an explicit tap.
- */
-@Composable
-private fun UpdatesSubSection(
-    preferences: AppPreferences,
-    updateTrigger: Int,
-    actions: SettingsActions
-) {
-    val isCheckEnabled = remember(updateTrigger) { preferences.isUpdateCheckEnabled() }
-
-    Column {
-        SettingsToggleRow(
-            icon = Icons.Filled.SystemUpdate,
-            label = stringResource(R.string.settings_update_check_label),
-            checked = isCheckEnabled,
-            onCheckedChange = { actions.setUpdateCheckEnabled(it) },
-            description = stringResource(R.string.settings_update_check_description)
-        )
-    }
-}
 
 @Composable
 internal fun SettingsSection(
@@ -3901,16 +2033,10 @@ private fun SettingsScreenPreview() {
             actions = dummyActions,
             contactPickerState = null,
             onBack = {},
-            onSelectFolder = {},
-            onSelectDriveFolder = {},
             onOpenContactsIncoming = {},
             onOpenContactsOutgoing = {},
             onConfirmContacts = {},
-            onDismissContacts = {},
-            onShareLogs = {},
-            onSaveLogs = {},
-            onExportSettings = {},
-            onImportSettings = {}
+            onDismissContacts = {}
         )
     }
 }

@@ -53,6 +53,71 @@ object WacrmSession {
         val role: String?,
     )
 
+    /**
+     * Reading the store has three outcomes, and callers must tell the
+     * last two apart: [SignedOut] means "no session was ever stored"
+     * (terminal for workers — mark FAILED + ask for reconnect), while
+     * [Unavailable] means "the encrypted store itself could not be
+     * opened or read" (transient — retry, never mark FAILED).
+     */
+    sealed interface SessionRead {
+        data class Available(val session: Session) : SessionRead
+        data object SignedOut : SessionRead
+        data class Unavailable(val reason: String) : SessionRead
+    }
+
+    /**
+     * Minimal store surface over the encrypted prefs. Exists so JVM
+     * unit tests can substitute an in-memory fake without Robolectric;
+     * production always uses [SharedPrefsBackingStore].
+     */
+    internal interface BackingStore {
+        fun getString(key: String): String?
+        fun getLong(key: String, def: Long): Long
+        /** Persists all string fields + expiry atomically. True only if committed. */
+        fun putAll(strings: Map<String, String?>, expiresAtMs: Long): Boolean
+        /** Removes every stored field. True only if committed. */
+        fun clearAll(): Boolean
+    }
+
+    private class SharedPrefsBackingStore(private val prefs: SharedPreferences) : BackingStore {
+        override fun getString(key: String): String? = prefs.getString(key, null)
+        override fun getLong(key: String, def: Long): Long = prefs.getLong(key, def)
+        override fun putAll(strings: Map<String, String?>, expiresAtMs: Long): Boolean {
+            val editor = prefs.edit()
+            for ((key, value) in strings) editor.putString(key, value)
+            editor.putLong(KEY_EXPIRES_AT_MS, expiresAtMs)
+            // commit(), not apply(): login/refresh must not report success until the
+            // session is durably on disk. Callers invoke this off the main thread.
+            return editor.commit()
+        }
+        override fun clearAll(): Boolean = prefs.edit().clear().commit()
+    }
+
+    /**
+     * Unit-test seam: when non-null, [read]/[save]/[clear] use this
+     * instead of EncryptedSharedPreferences. A null return (or a throw)
+     * is treated exactly like an unopenable encrypted store.
+     */
+    @Volatile
+    internal var openBackingStoreForTest: ((Context) -> BackingStore?)? = null
+
+    private fun openStore(context: Context): BackingStore? {
+        val override = openBackingStoreForTest
+        if (override != null) {
+            return runCatching { override(context) }.onFailure {
+                AppLogger.w(TAG, "Session store override failed: ${it.message}")
+            }.getOrNull()
+        }
+        return runCatching {
+            SharedPrefsBackingStore(
+                requireNotNull(open(context)) { "encrypted store unavailable" }
+            )
+        }.onFailure {
+            AppLogger.w(TAG, "Encrypted store unavailable: ${it.message}")
+        }.getOrNull()
+    }
+
     private fun open(context: Context): SharedPreferences? {
         return runCatching {
             val masterKey = MasterKey.Builder(context, MasterKey.DEFAULT_MASTER_KEY_ALIAS)
@@ -70,35 +135,57 @@ object WacrmSession {
         }.getOrNull()
     }
 
+    /**
+     * Reads the stored session, distinguishing "signed out" from "store
+     * unreadable" (see [SessionRead]). Never logs values.
+     */
+    fun read(context: Context): SessionRead {
+        val store = runCatching { openStore(context) }.getOrNull()
+            ?: return SessionRead.Unavailable("encrypted store unavailable")
+        return runCatching {
+            val access = store.getString(KEY_ACCESS_TOKEN)?.takeIf { it.isNotBlank() }
+            val refresh = store.getString(KEY_REFRESH_TOKEN)?.takeIf { it.isNotBlank() }
+            val userId = store.getString(KEY_USER_ID)?.takeIf { it.isNotBlank() }
+            val accountId = store.getString(KEY_ACCOUNT_ID)?.takeIf { it.isNotBlank() }
+            if (access == null || refresh == null || userId == null || accountId == null) {
+                SessionRead.SignedOut
+            } else {
+                SessionRead.Available(
+                    Session(
+                        accessToken = access,
+                        refreshToken = refresh,
+                        expiresAtMs = store.getLong(KEY_EXPIRES_AT_MS, 0L),
+                        userId = userId,
+                        userEmail = store.getString(KEY_USER_EMAIL),
+                        userName = store.getString(KEY_USER_NAME),
+                        accountId = accountId,
+                        accountName = store.getString(KEY_ACCOUNT_NAME),
+                        role = store.getString(KEY_ROLE),
+                    )
+                )
+            }
+        }.getOrElse {
+            AppLogger.w(TAG, "Could not read the WhatsApp Max session: ${it.message}")
+            SessionRead.Unavailable("could not read the session")
+        }
+    }
+
     /** Reads the stored session. Returns null unless access token, refresh token, user and
      *  account ids are all present and non-blank. Never logs values. */
     fun get(context: Context): Session? {
-        return runCatching {
-            val store = open(context) ?: return null
-            val access = store.getString(KEY_ACCESS_TOKEN, null)?.takeIf { it.isNotBlank() } ?: return null
-            val refresh = store.getString(KEY_REFRESH_TOKEN, null)?.takeIf { it.isNotBlank() } ?: return null
-            val userId = store.getString(KEY_USER_ID, null)?.takeIf { it.isNotBlank() } ?: return null
-            val accountId = store.getString(KEY_ACCOUNT_ID, null)?.takeIf { it.isNotBlank() } ?: return null
-            Session(
-                accessToken = access,
-                refreshToken = refresh,
-                expiresAtMs = store.getLong(KEY_EXPIRES_AT_MS, 0L),
-                userId = userId,
-                userEmail = store.getString(KEY_USER_EMAIL, null),
-                userName = store.getString(KEY_USER_NAME, null),
-                accountId = accountId,
-                accountName = store.getString(KEY_ACCOUNT_NAME, null),
-                role = store.getString(KEY_ROLE, null),
-            )
-        }.onFailure {
-            AppLogger.w(TAG, "Could not read the WhatsApp Max session: ${it.message}")
-        }.getOrNull()
+        return when (val read = read(context)) {
+            is SessionRead.Available -> read.session
+            is SessionRead.SignedOut,
+            is SessionRead.Unavailable -> null
+        }
     }
 
     /** True when a complete session is stored. */
     fun isConnected(context: Context): Boolean = get(context) != null
 
-    /** Persists a freshly authenticated session (login or refresh), replacing any prior one. */
+    /** Persists a freshly authenticated session (login or refresh), replacing any prior one.
+     *  Returns true only if the store opened AND the write committed — callers must not
+     *  report success on false. Blocking commit; call off the main thread. */
     fun save(
         context: Context,
         accessToken: String,
@@ -110,30 +197,32 @@ object WacrmSession {
         accountId: String,
         accountName: String?,
         role: String?,
-    ) {
-        runCatching {
-            val store = open(context) ?: return
-            store.edit()
-                .putString(KEY_ACCESS_TOKEN, accessToken)
-                .putString(KEY_REFRESH_TOKEN, refreshToken)
-                .putLong(KEY_EXPIRES_AT_MS, expiresAtMs)
-                .putString(KEY_USER_ID, userId)
-                .putString(KEY_USER_EMAIL, userEmail)
-                .putString(KEY_USER_NAME, userName)
-                .putString(KEY_ACCOUNT_ID, accountId)
-                .putString(KEY_ACCOUNT_NAME, accountName)
-                .putString(KEY_ROLE, role)
-                .apply()
+    ): Boolean {
+        return runCatching {
+            val store = openStore(context) ?: return false
+            store.putAll(
+                mapOf(
+                    KEY_ACCESS_TOKEN to accessToken,
+                    KEY_REFRESH_TOKEN to refreshToken,
+                    KEY_USER_ID to userId,
+                    KEY_USER_EMAIL to userEmail,
+                    KEY_USER_NAME to userName,
+                    KEY_ACCOUNT_ID to accountId,
+                    KEY_ACCOUNT_NAME to accountName,
+                    KEY_ROLE to role,
+                ),
+                expiresAtMs,
+            )
         }.onFailure {
             AppLogger.w(TAG, "Could not save the WhatsApp Max session: ${it.message}")
-        }
+        }.getOrDefault(false)
     }
 
     /** Removes every stored session field. Local recordings, the account, and the server
      *  session (revoked separately at disconnect time) are untouched. */
     fun clear(context: Context) {
         runCatching {
-            open(context)?.edit()?.clear()?.apply()
+            openStore(context)?.clearAll()
         }.onFailure {
             AppLogger.w(TAG, "Could not clear the WhatsApp Max session: ${it.message}")
         }

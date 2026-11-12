@@ -226,4 +226,52 @@ class WacrmAuthTest {
         assertEquals(false, WacrmAuth.hasPhoneNumber("""{"phoneRecordingSource":"sim1"}"""))
         assertEquals(false, WacrmAuth.hasPhoneNumber("not json"))
     }
+
+    @Test
+    fun `owner phone opt-in parses strictly, absent stays unknown`() {
+        assertEquals(true, WacrmAuth.parsePhoneRecordingEnabled("""{"phoneRecordingEnabled":true}"""))
+        assertEquals(false, WacrmAuth.parsePhoneRecordingEnabled("""{"phoneRecordingEnabled":false}"""))
+        // Absent or unusable (older server, wrong type): null, so the caller
+        // keeps the last-known value instead of inventing one.
+        assertNull(WacrmAuth.parsePhoneRecordingEnabled("""{"phoneRecordingSource":"sim1"}"""))
+        assertNull(WacrmAuth.parsePhoneRecordingEnabled("""{"phoneRecordingEnabled":null}"""))
+        assertNull(WacrmAuth.parsePhoneRecordingEnabled("""{"phoneRecordingEnabled":1}"""))
+        assertNull(WacrmAuth.parsePhoneRecordingEnabled("""{"phoneRecordingEnabled":"true"}"""))
+        assertNull(WacrmAuth.parsePhoneRecordingEnabled("not json"))
+        assertEquals(true, WacrmAuth.hasPhoneRecordingEnabled("""{"phoneRecordingEnabled":false}"""))
+        assertEquals(false, WacrmAuth.hasPhoneRecordingEnabled("""{"phoneRecordingSource":"sim1"}"""))
+    }
+
+    @Test
+    fun `phone configured flag parses strictly, absent stays unknown`() {
+        assertEquals(true, WacrmAuth.parsePhoneRecordingConfigured("""{"phoneRecordingConfigured":true}"""))
+        assertEquals(false, WacrmAuth.parsePhoneRecordingConfigured("""{"phoneRecordingConfigured":false}"""))
+        assertNull(WacrmAuth.parsePhoneRecordingConfigured("""{"phoneRecordingSource":"sim1"}"""))
+        assertNull(WacrmAuth.parsePhoneRecordingConfigured("""{"phoneRecordingConfigured":null}"""))
+        assertNull(WacrmAuth.parsePhoneRecordingConfigured("""{"phoneRecordingConfigured":0}"""))
+        assertNull(WacrmAuth.parsePhoneRecordingConfigured("not json"))
+    }
+
+    @Test
+    fun `disconnect revokes only this device session`() {
+        // GoTrue's logout default scope is GLOBAL (revokes every session
+        // for the user on all devices). Disconnect must stay device-local.
+        var requestUri = ""
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/auth/v1/logout") { exchange ->
+            requestUri = exchange.requestURI.toString()
+            exchange.sendResponseHeaders(204, -1)
+            exchange.close()
+        }
+        server.start()
+        try {
+            WacrmAuth.signOut(config(server.address.port), "access-token-fixture")
+            assertTrue(
+                "logout must carry scope=local, was: $requestUri",
+                requestUri.contains("scope=local"),
+            )
+        } finally {
+            server.stop(0)
+        }
+    }
 }

@@ -66,11 +66,13 @@ class AppPreferences(context: Context) {
             "transcription_batch_limit", "transcription_confirm_before_run", "transcription_model_id",
             "transcription_language", "transcription_ask_language",
             "summary_confirm_requirements", "summary_language",
-            // App (VoIP) calls policy
+            // App (VoIP) recording policy: local switches only. The Owner's
+            // per-app selection is server-synced and deliberately NOT
+            // exportable: importing another phone's selection could silently
+            // enable or disable recording for this device's owner policy.
             "voip_recording_enabled", "voip_auto_start", "voip_excluded_packages",
-            "whatsapp_recording_source",
-            // Updates
-            "update_check_enabled",
+            // No update-check key: automatic update checking is permanently
+            // disabled, so a backup must never be able to restore it to ON.
         )
 
         private const val EXPORT_TAG = "CV:SettingsExport"
@@ -256,9 +258,10 @@ class AppPreferences(context: Context) {
         const val ADB_PAIRED = false
 
         // --- In-app updates ---
-        // Check for new GitHub releases (a tiny daily JSON query). ON by default; a found update
-        // surfaces as a Home banner + notification and installs only on an explicit user tap.
-        const val UPDATE_CHECK_ENABLED = true
+        // Automatic update checking is permanently OFF: the preference is enforced false below, so
+        // neither the default nor any previously stored value can turn checks back on. Manual
+        // installation of a known update (Home banner action) is unaffected.
+        const val UPDATE_CHECK_ENABLED = false
 
         // --- Persistent recorder server (CallVault Plan 5) ---
         // OFF by default: when false the existing local recording path runs unchanged. When true the
@@ -285,6 +288,15 @@ class AppPreferences(context: Context) {
         // One-shot: both legacy toggles were ON, so no safe mapping
         // exists and the UI must ask. Not exported (device-local).
         const val WHATSAPP_SOURCE_MIGRATION_REQUIRED = false
+        // Owner-explicit phone recording opt-in (mirrors the server's
+        // phone_recording_enabled). Defaults to true for backward
+        // compatibility with servers that predate the flag: the stored
+        // number gate still applies, so a phone with no assigned number
+        // records nothing either way.
+        const val PHONE_RECORDING_ENABLED = true
+        // Epoch millis of the last successful owner-policy sync. 0 means
+        // never synced (or explicitly cleared, e.g. on logout).
+        const val LAST_POLICY_SYNC_MS = 0L
         // True = start an app call's recording by itself, which is what VoIP recording has always
         // done. False = detect the call and offer a Record button instead. Only consulted when
         // VOIP_RECORDING_ENABLED is on.
@@ -384,6 +396,14 @@ class AppPreferences(context: Context) {
         PAIRING_REFUSALS(PAIRING_REFUSALS_KEY),
         LOOPBACK_ADB_PORT("loopback_adb_port"),
         OFFLINE_RECORDING_ENABLED("offline_recording_enabled"),
+        /**
+         * Whether the one-time USB-debugging onboarding for offline recording has been
+         * completed. Set only when an offline loopback setup reaches ARMED with USB
+         * debugging verified on — never inferred from the live switch state, and never a
+         * substitute for checking the live USB-debugging state or the loopback listener
+         * before recording. Standalone-ADB only; Shizuku users never set it.
+         */
+        USB_ONBOARDING_COMPLETED("usb_onboarding_completed"),
         KEEP_ORIGINALS_AFTER_MERGE("keep_originals_after_merge"),
 
         // --- In-app updates ---
@@ -416,6 +436,24 @@ class AppPreferences(context: Context) {
          * a number belongs to this device's SIMs, not to a backup.
          */
         PHONE_RECORDING_NUMBER("phone_recording_number"),
+        /**
+         * Whether the Owner explicitly enabled phone recording. Set only from
+         * the server's phone_recording_enabled (or cleared on logout); never
+         * user-editable on device. Deliberately NOT in EXPORTABLE_KEYS.
+         */
+        PHONE_RECORDING_ENABLED("phone_recording_enabled"),
+        /**
+         * Whether the Owner has ever saved recording settings for this user
+         * (row exists server-side). Distinguishes "explicitly disabled" from
+         * "never configured" in the read-only UI. Deliberately NOT exported.
+         */
+        PHONE_RECORDING_CONFIGURED("phone_recording_configured"),
+        /**
+         * Epoch millis of the last successful Owner-policy sync. Used with
+         * [WhatsappSourceSync.isPolicyFresh] to bound staleness; 0 (or a
+         * deliberate clear on logout) means "no fresh policy". Never exported.
+         */
+        LAST_POLICY_SYNC_MS("last_policy_sync_ms"),
         WHATSAPP_SOURCE_MIGRATION_REQUIRED("whatsapp_source_migration_required"),
         
         // --- Automation ---
@@ -623,6 +661,16 @@ class AppPreferences(context: Context) {
     fun setOfflineRecordingEnabled(enabled: Boolean) = setBoolean(Key.OFFLINE_RECORDING_ENABLED, enabled)
 
     /**
+     * Whether the one-time USB-debugging onboarding for offline recording completed.
+     * Off by default, including for existing installs: it records a *completed* setup,
+     * so nothing already working is gated on it.
+     */
+    fun isUsbOnboardingCompleted() = getBoolean(Key.USB_ONBOARDING_COMPLETED, false)
+
+    /** Marks the USB-debugging onboarding complete. Only call after a verified setup. */
+    fun setUsbOnboardingCompleted(completed: Boolean) = setBoolean(Key.USB_ONBOARDING_COMPLETED, completed)
+
+    /**
      * Whether merging keeps the calls it was made from.
      *
      * Off by default, so a merge leaves one recording — the point of the feature. Keeping them is
@@ -641,8 +689,15 @@ class AppPreferences(context: Context) {
      * existing local recording pipeline runs unchanged; when true the recording layer drives the
      * detached daemon ([com.baba.callvault.server.RecorderServer]) over binder.
      */
-    fun isUpdateCheckEnabled() = getBoolean(Key.UPDATE_CHECK_ENABLED, DefaultsValue.UPDATE_CHECK_ENABLED)
-    fun setUpdateCheckEnabled(enabled: Boolean) = setBoolean(Key.UPDATE_CHECK_ENABLED, enabled)
+    /**
+     * Whether automatic update checks may run. Permanently OFF: always returns false, so a stored
+     * `true` from an older version cannot re-enable background checks. The scheduler and worker
+     * both read this, so periodic and on-open checks are cancelled/never enqueued.
+     */
+    fun isUpdateCheckEnabled() = false
+    /** Persists the update-check preference. Always stores false: checks cannot be re-enabled. */
+    fun setUpdateCheckEnabled(@Suppress("UNUSED_PARAMETER") enabled: Boolean) =
+        setBoolean(Key.UPDATE_CHECK_ENABLED, false)
 
     /** Release tag of a known-newer version (drives the Home banner + notification); null = none. */
     fun getAvailableUpdateTag() = getString(Key.AVAILABLE_UPDATE_TAG)
@@ -801,6 +856,49 @@ class AppPreferences(context: Context) {
         } else {
             setString(Key.PHONE_RECORDING_NUMBER, number)
         }
+    }
+
+    /**
+     * Whether the Owner explicitly enabled phone call recording. Synced from
+     * the server's `phone_recording_enabled`; never set from the UI. Defaults
+     * to true for backward compatibility with servers that predate the flag —
+     * the assigned-number gate still applies, so a phone with no assigned
+     * number records nothing either way.
+     */
+    fun isPhoneRecordingEnabled(): Boolean =
+        getBoolean(Key.PHONE_RECORDING_ENABLED, DefaultsValue.PHONE_RECORDING_ENABLED)
+
+    fun setPhoneRecordingEnabled(enabled: Boolean) = setBoolean(Key.PHONE_RECORDING_ENABLED, enabled)
+
+    /**
+     * Whether the Owner has ever saved recording settings for this user (the
+     * server row exists). Distinguishes "explicitly disabled" from "never
+     * configured" in the read-only UI. Synced from the server; never set
+     * from the UI.
+     */
+    fun isPhoneRecordingConfigured(): Boolean = getBoolean(Key.PHONE_RECORDING_CONFIGURED, false)
+
+    fun setPhoneRecordingConfigured(configured: Boolean) = setBoolean(Key.PHONE_RECORDING_CONFIGURED, configured)
+
+    /** Epoch millis of the last successful Owner-policy sync; 0 = never. */
+    fun getLastPolicySyncMs(): Long = getLong(Key.LAST_POLICY_SYNC_MS, DefaultsValue.LAST_POLICY_SYNC_MS)
+
+    fun setLastPolicySyncMs(atMillis: Long) = setLong(Key.LAST_POLICY_SYNC_MS, atMillis)
+
+    /**
+     * Drops the Owner-synced recording policy (number, enabled flag,
+     * configured flag, last-sync stamp). Used on logout and before the first
+     * sync for a fresh login, so a stale or previous-user policy can never
+     * authorize recording. Does not touch the session itself — see
+     * [WacrmSession.clear] — and does not change authentication.
+     */
+    fun clearRecordingPolicy() {
+        prefs.edit()
+            .remove(Key.PHONE_RECORDING_NUMBER.id)
+            .remove(Key.PHONE_RECORDING_ENABLED.id)
+            .remove(Key.PHONE_RECORDING_CONFIGURED.id)
+            .remove(Key.LAST_POLICY_SYNC_MS.id)
+            .apply()
     }
 
     /**
@@ -1250,14 +1348,15 @@ class AppPreferences(context: Context) {
      * Whether an authorized WhatsApp Max dial request may open the
      * native dialer by itself (foreground auto-open, or background
      * auto-open when the overlay permission was also granted).
-     * Off by default: without this, requests only ever surface as
-     * notifications that the user taps. Enabling it never dials or
-     * calls anything — the dialer always opens prefilled only.
+     * Always enabled: returns true regardless of any previously stored
+     * value, so an old `false` can never disable it. The dispatcher
+     * still enforces the overlay permission at delivery time, and
+     * nothing here ever dials — the dialer always opens prefilled only.
      */
-    fun isDialAutoOpen(): Boolean = getBoolean(Key.DIAL_AUTO_OPEN, false)
+    fun isDialAutoOpen(): Boolean = true
 
-    /** Sets whether authorized dial requests may open the dialer by themselves. */
-    fun setDialAutoOpen(enabled: Boolean) = setBoolean(Key.DIAL_AUTO_OPEN, enabled)
+    /** Persists the dial auto-open preference. Always stores true: auto-open cannot be turned off. */
+    fun setDialAutoOpen(@Suppress("UNUSED_PARAMETER") enabled: Boolean) = setBoolean(Key.DIAL_AUTO_OPEN, true)
 
     // --- Retention (auto-delete old recordings; 0 = keep forever) ---
 
@@ -1634,7 +1733,7 @@ class AppPreferences(context: Context) {
             settings.put(key, entry)
         }
         return JSONObject()
-            .put("app", "CallVault")
+            .put("app", "Call Recorder")
             .put("format", 1)
             .put("settings", settings)
             .toString(2)

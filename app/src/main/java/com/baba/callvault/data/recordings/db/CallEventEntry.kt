@@ -68,6 +68,25 @@ interface CallEventDao {
     @Query("UPDATE call_events SET uploadState = :state WHERE clientEventId = :clientEventId")
     suspend fun setState(clientEventId: String, state: Int)
 
+    /**
+     * IDs of events whose upload terminally failed. Used only by the
+     * one-time HTTP-400 recovery: a failed row keeps its original
+     * payload and idempotency UUID, so requeueing it can never
+     * create a duplicate — the server dedupes on
+     * UNIQUE(account_id, client_event_id).
+     */
+    @Query("SELECT clientEventId FROM call_events WHERE uploadState = :failedState")
+    suspend fun failedEventIds(failedState: Int): List<String>
+
+    /**
+     * Return a failed event to the never-attempted state so the
+     * regular worker (same idempotency key, same unique work name)
+     * picks it up again. Only the recovery path uses this; normal
+     * uploads move forward through PENDING → UPLOADED/FAILED.
+     */
+    @Query("UPDATE call_events SET uploadState = NULL WHERE clientEventId = :clientEventId")
+    suspend fun clearState(clientEventId: String)
+
     @Query("SELECT COUNT(*) FROM call_events WHERE uploadState IS NULL OR uploadState = :pendingState")
     suspend fun pendingCount(pendingState: Int): Int
 }

@@ -10,10 +10,9 @@ package com.baba.callvault.services.call
 
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
-import android.provider.ContactsContract
 import android.telephony.TelephonyManager
 import com.baba.callvault.system.storage.CutOffRescueWorker
+import com.baba.callvault.system.storage.WhatsappSourceSync
 import com.baba.callvault.data.AppPreferences
 import com.baba.callvault.data.health.SetupHealthStore
 import com.baba.callvault.data.health.SetupPrerequisites
@@ -22,14 +21,11 @@ import com.baba.callvault.data.recordings.RecordingDirection
 import com.baba.callvault.data.recordings.RecordingMetadata
 import com.baba.callvault.services.recording.DaemonKeepAliveService
 import com.baba.callvault.services.recording.RecordingForegroundService
-import com.baba.callvault.services.recording.RecordingPolicy
 import com.baba.callvault.services.recording.VoipRecordingCoordinator
 import com.baba.callvault.services.recording.VoipTelephonyGate
 import com.baba.callvault.server.RecorderConnection
-import com.baba.callvault.system.permissions.PermissionChecks
 import com.baba.callvault.utils.AppLogger
 import com.baba.callvault.utils.PhoneNumberManager
-import com.baba.callvault.utils.PhoneNumberManager.Companion.normalisePhoneNumber
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,7 +36,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * CallSessionManager role is to receive telephony state changes, determine call session information (like its direction and metadata),
- * and decide how to start the [RecordingForegroundService] based on user preferences and contact filtering.
+ * and start the [RecordingForegroundService] for calls on the Owner-assigned SIM.
  *
  * It is implemented as a singleton that should live until the app process itself die.
  */
@@ -160,12 +156,6 @@ class CallSessionManager private constructor(context: Context) {
      */
     private var sessionJob: Job? = null
 
-    /**
-     * The poll that waits for an outgoing call to be answered before starting the recording — see
-     * [AnswerWait]. Cancelled by IDLE, so a call that is never picked up records nothing.
-     */
-    private var answerJob: Job? = null
-
 
     init {
         AppLogger.d(TAG, "CallSessionManager initialised")
@@ -212,7 +202,6 @@ class CallSessionManager private constructor(context: Context) {
         // 1. Handle IDLE (Stop, no longer in a call)
         if (receivedCallState == TelephonyManager.CALL_STATE_IDLE) {
             sessionJob?.cancel() // Cancel pending verification window or ongoing session if any
-            answerJob?.cancel()
             // Any call's end — even one this process never saw start, because the phone killed and restarted
             // CallVault mid-call — is when a recording that call left behind can be saved (backlog #4).
             CutOffRescueWorker.schedule(appContext)
@@ -322,8 +311,10 @@ class CallSessionManager private constructor(context: Context) {
     }
 
     /**
-     * Evaluates user preferences and contact filtering to decide whether to start recording immediately or go to standby mode,
-     * then sends the appropriate command to the recording service.
+     * Starts recording for an owner-authorized call immediately. The Owner's assigned
+     * SIM is the only gate: local switches, filters and prompts never apply here, and
+     * nothing else can start recording either. A non-authorized call never reaches the
+     * recording pipe: no start, no standby prompt, no daemon warm-up, no upload.
      */
     private suspend fun evaluateAndStartService() {        if (session.wasRecordingServiceStartIntentSend) {
             AppLogger.d(TAG, "Current call session has already sent a intent that started RecordingForegroundService. Skipping duplicate intent.")
@@ -331,46 +322,18 @@ class CallSessionManager private constructor(context: Context) {
         }
         val sessionMetadata = session.currentMetadata ?: throw IllegalStateException("Metadata should have been determined by now. There is a logic error.")
 
-        // Owner phone policy, checked before anything is created or sent — the
-        // same position the carrier master switch holds below. A filtered call never reaches the
-        // recording pipe: no start, no standby prompt, no daemon warm. Unlike IGNORE below this
-        // leaves wasRecordingServiceStartIntentSend unset, so a later broadcast for the same call
-        // (e.g. the second half of the double broadcast carrying the subscription id) still gets
-        // its own decision instead of being deduped into silence.
+        // Owner phone policy, checked before anything is created or sent — the single
+        // gate for carrier recording. A non-authorized call never reaches the recording
+        // pipe: no start, no standby prompt, no daemon warm-up, no upload. Local switches,
+        // filters and the Record prompt cannot start, stop, or delay an owner-authorized
+        // call, and cannot start one the owner did not authorize.
         if (!isSimAllowed(sessionMetadata.subscriptionId)) {
-            AppLogger.i(TAG, "Call is on subscription ${sessionMetadata.subscriptionId}, owner phone number not matched — ignoring this ${sessionMetadata.direction} call entirely.")
+            AppLogger.i(TAG, "Call is on subscription ${sessionMetadata.subscriptionId}, owner phone number not matched - ignoring this ${sessionMetadata.direction} call entirely.")
             return
         }
-
-        // IGNORE is genuinely "do nothing" — note that the OFFER branch is not: it posts a standby
-        // notification with a Record button, on every call. Someone who turned phone-call recording
-        // off wants silence, not a prompt each time.
-        when (RecordingPolicy.forCarrierCall(
-            carrierEnabled = preferences.isCarrierRecordingEnabled(),
-            autoRecord = shouldAutoRecord(sessionMetadata),
-        )) {
-            RecordingPolicy.CarrierAction.IGNORE ->
-                AppLogger.i(TAG, "Phone-call recording is off — ignoring this ${sessionMetadata.direction} call entirely.")
-
-            RecordingPolicy.CarrierAction.RECORD -> {
-                reportGapIfPrerequisiteMissing(sessionMetadata)
-                if (sessionMetadata.direction == RecordingDirection.OUTGOING && preferences.isRecordFromAnswerEnabled()) {
-                    // Standby warms the daemon at the dial, exactly as it does for a call that is
-                    // offered rather than recorded; the start follows when the far end picks up.
-                    AppLogger.i(TAG, "Sending standby INTENT for ${sessionMetadata.direction} call; recording starts when it is answered.")
-                    sendServiceCommand(RecordingForegroundService.ACTION_STANDBY, sessionMetadata)
-                    answerJob = managerScope.launch { startWhenAnswered(sessionMetadata) }
-                } else {
-                    AppLogger.i(TAG, "Sending start INTENT for ${sessionMetadata.direction} call to RecordingForegroundService.")
-                    sendServiceCommand(RecordingForegroundService.ACTION_START_RECORDING, sessionMetadata)
-                }
-            }
-
-            RecordingPolicy.CarrierAction.OFFER -> {
-                AppLogger.i(TAG, "Sending standby INTENT for ${sessionMetadata.direction} call to RecordingForegroundService.")
-                sendServiceCommand(RecordingForegroundService.ACTION_STANDBY, sessionMetadata)
-            }
-        }
+        reportGapIfPrerequisiteMissing(sessionMetadata)
+        AppLogger.i(TAG, "Sending start intent for ${sessionMetadata.direction} call to RecordingForegroundService (owner-authorized).")
+        sendServiceCommand(RecordingForegroundService.ACTION_START_RECORDING, sessionMetadata)
         session.wasRecordingServiceStartIntentSend = true
     }
 
@@ -402,10 +365,18 @@ class CallSessionManager private constructor(context: Context) {
     private suspend fun isSimAllowed(callSubscriptionId: Int?): Boolean {
         // Owner-configured number (server-synced, authoritative) is
         // the stable identity; it is resolved to the CURRENT active
-        // subscription on every call — never cached, never the slot.
+        // subscription on every call - never cached, never the slot.
+        if (!preferences.isPhoneRecordingEnabled()) {
+            AppLogger.i(TAG, "SIM gate: owner phone recording is not enabled - not recording this call.")
+            return false
+        }
         val configuredNumber = preferences.getPhoneRecordingNumber()
         if (configuredNumber.isNullOrBlank()) {
-            AppLogger.i(TAG, "SIM gate: no owner phone number configured — not recording this call.")
+            AppLogger.i(TAG, "SIM gate: no owner phone number configured - not recording this call.")
+            return false
+        }
+        if (!WhatsappSourceSync.isPolicyFresh(preferences)) {
+            AppLogger.w(TAG, "SIM gate: owner policy is stale (no recent sync) - not recording this call.")
             return false
         }
         // One binder batch: the active list (with per-SIM numbers for
@@ -430,9 +401,9 @@ class CallSessionManager private constructor(context: Context) {
     }
 
     /**
-     * Reports, for the status card, when THIS call — one the user expected recorded, per
-     * [shouldAutoRecord] — starts with a user-owned prerequisite missing (no recording folder, ADB
-     * never paired, Developer options off, or the WRITE_SECURE_SETTINGS grant gone while the daemon is
+     * Reports, for the status card, when an owner-authorized call starts with a user-owned
+     * prerequisite missing (no recording folder, ADB never paired, Developer options off, or
+     * the WRITE_SECURE_SETTINGS grant gone while the daemon is
      * disconnected). Recording this precisely (and separately from the generic call-log gap — see
      * [com.baba.callvault.data.health.SetupHealth.CallMissedNotReady]) means the card names the exact
      * cause instead of the sweep inferring an unexplained failure later, for a call that was never
@@ -482,37 +453,6 @@ class CallSessionManager private constructor(context: Context) {
     /**
      * Builds and fires an Intent to the [RecordingForegroundService].
      */
-    /**
-     * Polls the recorder host for the precise call state and sends the start the moment the call is
-     * ACTIVE. Every outcome but "still ringing" starts the recording — a host that cannot say, or a
-     * wait that runs too long, must not cost the call. See [AnswerWait] for the rule.
-     */
-    private suspend fun startWhenAnswered(metadata: RecordingMetadata) {
-        val startedAt = System.currentTimeMillis()
-        var polls = 0
-        while (true) {
-            val host = RecorderConnection.service
-            val dump = withContext(Dispatchers.IO) {
-                runCatching { host?.diagnosticDump("call_state", null) }.getOrNull()
-            }
-            val state = AnswerWait.parseState(dump)
-            val elapsed = System.currentTimeMillis() - startedAt
-            polls++
-            if (AnswerWait.decide(state, elapsed, hostConnected = host != null) == AnswerWait.Decision.START) {
-                val why = when {
-                    state == null && host == null -> "no recorder host to ask"
-                    state == null -> "no call state readable from the host"
-                    elapsed >= AnswerWait.MAX_WAIT_MS -> "waited ${elapsed / 1000}s without an answer"
-                    else -> "call answered"
-                }
-                AppLogger.i(TAG, "Sending start INTENT for ${metadata.direction} call after $polls polls: $why (state=$state, ${elapsed}ms).")
-                sendServiceCommand(RecordingForegroundService.ACTION_START_RECORDING, metadata)
-                return
-            }
-            delay(AnswerWait.POLL_MS)
-        }
-    }
-
     private fun sendServiceCommand(action: String, metadata: RecordingMetadata? = null) {
         val intent = Intent(appContext, RecordingForegroundService::class.java).apply {
             this.action = action
@@ -528,99 +468,5 @@ class CallSessionManager private constructor(context: Context) {
             appContext.startForegroundService(intent)
         }
     }
-
-    /**
-     * Determines whether the current call session should be automatically recorded based on user preferences.
-     */
-    private fun shouldAutoRecord(metadata: RecordingMetadata): Boolean {
-        val rawNumber = metadata.rawPhoneNumber?.trim().orEmpty()
-        val normalisedNumber = normalisePhoneNumber(rawNumber)
-        val isAnonymous = normalisedNumber.isBlank()
-
-        when (metadata.direction) {
-            RecordingDirection.INCOMING -> {
-                if (!preferences.isAutoRecordIncomingEnabled()) {
-                    AppLogger.i(TAG, "Auto-record for incoming call is disabled")
-                    return false
-                }
-
-                if (isAnonymous) {
-                    if (preferences.isIgnoreAnonymousIncomingEnabled()) {
-                        AppLogger.i(TAG, "Auto-record is ignoring incoming call since it's anonymous.")
-                        return false
-                    }
-                }
-
-                if (metadata.isCrossCountry && preferences.isIgnoreCrossCountryIncomingEnabled()) {
-                    AppLogger.i(TAG, "Auto-record is ignoring incoming call since it's cross-country.")
-                    return false
-                }
-
-                if (shouldIgnoreContact(normalisedNumber, preferences.getIgnoreContactsModeIncoming(), preferences.getIgnoredContactsIncoming(), preferences.getRecordOnlyContactsIncoming())) {
-                    AppLogger.i(TAG, "Auto-record is ignoring incoming call based on contact filtering.")
-                    return false
-                }
-
-                AppLogger.i(TAG, "Auto-record is enabled for this incoming call.")
-                return true
-            }
-            RecordingDirection.OUTGOING -> {
-                if (!preferences.isAutoRecordOutgoingEnabled()) {
-                    AppLogger.i(TAG, "Auto-record for outgoing call is disabled")
-                    return false
-                }
-
-                if (metadata.isCrossCountry && preferences.isIgnoreCrossCountryOutgoingEnabled()) {
-                    AppLogger.i(TAG, "Auto-record is ignoring outgoing call since it's cross-country.")
-                    return false
-                }
-
-                if (shouldIgnoreContact(normalisedNumber, preferences.getIgnoreContactsModeOutgoing(), preferences.getIgnoredContactsOutgoing(), preferences.getRecordOnlyContactsOutgoing())) {
-                    AppLogger.i(TAG, "Auto-record is ignoring outgoing call for based on contact filtering.")
-                    return false
-                }
-
-                AppLogger.i(TAG, "Auto-record is enabled for this outgoing call.")
-                return true
-            }
-        }
-    }
-
-    /**
-     * Determines whether a call from/to a specific phone number should be ignored based on the user's contact filtering preferences.
-     */
-    private fun shouldIgnoreContact(
-        normalisedNumber: String,
-        mode: AppPreferences.IgnoreContactsMode,
-        ignoredNumbers: Set<String>,
-        recordOnlyNumbers: Set<String>,
-    ): Boolean = ContactIgnoreRule.shouldIgnore(
-        normalisedNumber = normalisedNumber,
-        mode = mode,
-        ignoredNumbers = ignoredNumbers,
-        isKnownContact = { isSavedContact(normalisedNumber) },
-        recordOnlyNumbers = recordOnlyNumbers,
-    )
-
-    /**
-     * Whether [normalisedNumber] belongs to a saved contact.
-     *
-     * Only reached in [AppPreferences.IgnoreContactsMode.ALL], and only for a non-blank number —
-     * [ContactIgnoreRule] guarantees both. It is allowed to throw; the rule catches it and records the
-     * call, because failing to record is the worse of the two mistakes.
-     */
-    private fun isSavedContact(normalisedNumber: String): Boolean {
-        if (!PermissionChecks.hasContactsPermission(appContext)) return false
-
-        val lookupUri = Uri.withAppendedPath(
-            ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
-            Uri.encode(normalisedNumber)
-        )
-        val cursor = appContext.contentResolver.query(
-            lookupUri, arrayOf(ContactsContract.PhoneLookup._ID), null, null, null
-        )
-        // A contact was found if the cursor has a first row; a null cursor means the provider gave us
-        // nothing, which is not a match either.
-        return cursor?.use { it.moveToFirst() } ?: false
-    }
 }
+

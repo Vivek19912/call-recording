@@ -42,6 +42,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -255,6 +256,11 @@ fun PermissionsContent(
     var wirelessDebuggingEnabled by remember {
         mutableStateOf(AdbShell.isWirelessDebuggingEnabled(context))
     }
+    // Re-read USB debugging on demand: returning from Developer Options must reflect the new
+    // switch position immediately, and an unreadable (UNKNOWN) state must be re-checkable
+    // without leaving the screen. No polling — only resume and the explicit Check again button.
+    var usbCheckTick by remember { mutableIntStateOf(0) }
+    val usbState = remember(usbCheckTick) { AdbShell.usbDebuggingState(context) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -262,6 +268,7 @@ fun PermissionsContent(
                 devOptionsEnabled = isDeveloperOptionsEnabled(context)
                 offerBuildNumberStep = shouldOfferBuildNumberStep(context)
                 wirelessDebuggingEnabled = AdbShell.isWirelessDebuggingEnabled(context)
+                usbCheckTick++
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -401,21 +408,68 @@ fun PermissionsContent(
                 // debugging off — `adbd` needs one of the two, and this is the one that opens no
                 // network port. Shown as "Recommended" rather than "Required" so nobody is misled
                 // into thinking recording depends on it.
+                //
+                // One-time offline setup: in standalone mode with USB debugging proven off, the card
+                // explains the offline-recording requirement and offers Developer Options directly.
+                // Shizuku users keep the original display — their backend has no use for this switch.
+                // An unreadable state is never presented as off; it gets its own "not verified" row.
                 item {
+                    val showUsbSetup = !privilegedMode.needsShizuku
+                    val usb = usbState
                     // Tri-state, and this card is OUTSIDE the Shizuku mode gate, so it is one of only two
                     // places the redaction reaches a Shizuku user. A phone that will not say is shown as
                     // granted rather than as a standing "Recommended" nag: on a redacting build the nag
                     // would be permanent and unfixable, and this step is advice, not a requirement.
-                    val usb = AdbShell.usbDebuggingState(LocalContext.current)
                     val nag = usb.isOff
                     PermissionCard(
                         icon = Icons.Default.Usb,
-                        label = stringResource(R.string.permission_usb_debugging_label),
-                        description = stringResource(R.string.permission_usb_debugging_description),
+                        label = stringResource(
+                            if (showUsbSetup && nag) R.string.usb_onboarding_title
+                            else R.string.permission_usb_debugging_label
+                        ),
+                        description = stringResource(
+                            if (showUsbSetup && nag) R.string.usb_onboarding_desc
+                            else R.string.permission_usb_debugging_description
+                        ),
                         granted = !nag,
-                        pillText = if (nag) stringResource(R.string.general_recommended) else null,
-                        pillTone = if (nag) CvTone.Neutral else null,
+                        pillText = when {
+                            nag -> stringResource(R.string.general_recommended)
+                            !showUsbSetup || usb.isOn -> null
+                            else -> stringResource(R.string.usb_onboarding_unverified_title)
+                        },
+                        pillTone = when {
+                            nag -> CvTone.Neutral
+                            !showUsbSetup || usb.isOn -> null
+                            else -> CvTone.Neutral
+                        },
                     )
+                }
+                // Standalone only, proven off only: the one-tap route to the switch that unblocks
+                // offline recording. Shizuku mode and already-on phones see nothing here.
+                if (!privilegedMode.needsShizuku && usbState.isOff) {
+                    item {
+                        CvCard(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
+                            TextButton(
+                                onClick = { context.openDeveloperSettings() },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(stringResource(R.string.oem_gate_open_dev_options))
+                            }
+                        }
+                    }
+                }
+                // Standalone only, unreadable only: explicit re-check that never claims the switch is off.
+                if (!privilegedMode.needsShizuku && !usbState.isOff && !usbState.isOn) {
+                    item {
+                        CvCard(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
+                            TextButton(
+                                onClick = { usbCheckTick++ },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(stringResource(R.string.settings_wacrm_auto_open_recheck))
+                            }
+                        }
+                    }
                 }
                 // The same choice as in Settings: may CallVault switch Wireless debugging back on after the
                 // user turned it off? Asked here too, because it decides how the app treats a switch the

@@ -28,6 +28,7 @@ import com.baba.callvault.server.IRecorderService
 import com.baba.callvault.server.RecorderConnection
 import com.baba.callvault.server.RecorderServiceImpl
 import com.baba.callvault.system.storage.SafHelper
+import com.baba.callvault.system.storage.WhatsappSourceSync
 import com.baba.callvault.data.recordings.CallTypeResolver
 import com.baba.callvault.data.recordings.RecordingCatalog
 import com.baba.callvault.data.waveform.RecordingExtrasRepository
@@ -110,12 +111,17 @@ object VoipRecordingCoordinator {
     @Volatile private var heldForAnswer = false
     @Volatile private var codecMime: String = "audio/ogg"
 
-    /** Starts a VoIP recording. No-op when the feature is off, already recording, or unavailable. */
+    /** Starts a VoIP recording. No-op when already recording or unavailable.
+     *
+     * Owner policy is the gate for WhatsApp-family calls: the Owner's selected
+     * application alone decides, and local VoIP switches / exclusion sets can
+     * neither suppress an authorized app nor enable a non-selected one. Calls
+     * from outside the WhatsApp family keep the existing local behavior.
+     */
     @Synchronized
     fun onCallStarted(context: Context) {
         if (recording) return
         val prefs = AppPreferences(context)
-        if (!prefs.isVoipRecordingEnabled()) return
 
         val service = RecorderConnection.service
         if (service == null) {
@@ -151,18 +157,37 @@ object VoipRecordingCoordinator {
         }
         // The mutually exclusive WhatsApp source, checked before anything is created OR
         // reported (same position the per-app choice below holds): exactly one WhatsApp app may
-        // record. Non-WhatsApp packages defer to the generic exclusion set underneath.
+        // record. Non-WhatsApp packages (allowsPackage == null) defer to the generic local
+        // behavior underneath.
         val sourceDecision = WhatsappRecordingSource.allowsPackage(
             prefs.getWhatsappRecordingSource(), callPackage
         )
-        if (sourceDecision == false) {
-            // Not reportMissed(): this is not a miss. The user asked for the other app (or
-            // neither), and telling them off for getting what they configured is how a warning
-            // becomes noise.
-            AppLogger.i(TAG, "Not recording this call: $callPackage is not the selected WhatsApp recording source.")
-            return
-        }
-        // The user's per-app choice, checked before anything is created OR reported. Not later:
+        if (sourceDecision != null) {
+            // Owner-authorized WhatsApp path: the Owner's selection is the ONLY gate.
+            // Local VoIP switches and exclusion sets are bypassed here — they can neither
+            // suppress the selected app nor enable the other one or None.
+            if (callPackage.isNullOrBlank()) {
+                // The app identity could not be established: never assume it is the
+                // Owner-selected app. Fail closed (record nothing) rather than risk
+                // recording the wrong app under the Owner's name.
+                AppLogger.i(TAG, "Not recording this call: app identity unknown, cannot match Owner WhatsApp selection.")
+                return
+            }
+            if (sourceDecision == false) {
+                // Not reportMissed(): this is not a miss. The Owner selected the other app
+                // (or neither), and telling them off for getting what is configured is how
+                // a warning becomes noise.
+                AppLogger.i(TAG, "Not recording this call: $callPackage is not the Owner-selected WhatsApp recording source.")
+                return
+            }
+            if (!WhatsappSourceSync.isPolicyFresh(prefs)) {
+                AppLogger.w(TAG, "Not recording this call: Owner WhatsApp policy is stale (no recent sync).")
+                return
+            }
+        } else {
+            // Non-WhatsApp app call: preserved local behavior only.
+            if (!prefs.isVoipRecordingEnabled()) return
+            // The user's per-app choice, checked before anything is created OR reported. Not later:
         // creating the file first and deleting it would put a recording of an excluded app on disk,
         // however briefly, leaving a window where a sync tool could take a copy of it — and reporting
         // first would tell the user off for getting exactly what they configured. This used to sit
@@ -173,6 +198,7 @@ object VoipRecordingCoordinator {
             // and telling them off for getting what they configured is how a warning becomes noise.
             AppLogger.i(TAG, "Not recording this call: $callPackage is switched off for recording.")
             return
+        }
         }
 
         val folderUri = prefs.getRecordingFolderUri()

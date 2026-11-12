@@ -29,6 +29,9 @@ ksp = "2.3.9"
 aboutlibraries = "14.2.1"
 libphonenumber = "9.0.31"
 
+# Click-to-dial WebSocket (persistent authenticated connection).
+okhttp = "4.12.0"
+
 [libraries]
 shizukuApi = { module = "dev.rikka.shizuku:api", version.ref = "shizuku-api" }
 shizukuProvider = { module = "dev.rikka.shizuku:provider", version.ref = "shizuku-provider" }
@@ -60,6 +63,9 @@ aboutlibraries-compose-m3 = { module = "com.mikepenz:aboutlibraries-compose-m3",
 
 # Libphonenumber
 libphonenumber = { module = "com.googlecode.libphonenumber:libphonenumber", version.ref = "libphonenumber" }
+
+# OkHttp: the persistent click-to-dial WebSocket (no polling/FCM).
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 
 # EncryptedSharedPreferences (WACRM API key storage)
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "security-crypto" }

@@ -12,8 +12,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.baba.callvault.data.AppPreferences
+import com.baba.callvault.data.WacrmSession
 import com.baba.callvault.services.call.CallMonitorService
 import com.baba.callvault.services.recording.DaemonKeepAliveService
+import com.baba.callvault.system.storage.DialSocketService
 import com.baba.callvault.utils.AppLogger
 
 /**
@@ -27,6 +29,13 @@ class BootReceiver : BroadcastReceiver() {
         // Same reason as the app-start warmup: gating on pairing meant a Shizuku user got NOTHING
         // on boot — no call monitor, no recorder bind — on the one path where a reboot has just
         // stopped Shizuku too.
+        //
+        // The dial socket is NOT gated on the privileged transport: it needs no ADB, only a
+        // stored session. Reconnect it whenever one is available, even when privileged
+        // transport was never set up. The recording/ADB services below stay gated.
+        if (WacrmSession.read(context) is WacrmSession.SessionRead.Available) {
+            DialSocketService.ensureStarted(context)
+        }
         if (!AppPreferences(context).isPrivilegedTransportSetUp()) return
         AppLogger.i(TAG, "Boot completed; starting ADB connection service + post-boot call monitor")
         AdbConnectionService.start(context)
@@ -36,6 +45,8 @@ class BootReceiver : BroadcastReceiver() {
         // Persistent anchor: keep the recorder daemon warm from boot onward so calls record instantly
         // (and off-Wi-Fi over binder) without a per-call cold-start. Boot grants the FGS-start exemption.
         DaemonKeepAliveService.start(context)
+        // Reconnect desktop click-to-dial after a reboot (no-op unless WACRM is connected and enabled).
+        DialSocketService.ensureStarted(context)
     }
 
     companion object {

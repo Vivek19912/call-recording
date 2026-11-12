@@ -7,11 +7,11 @@ import com.baba.callvault.utils.AppLogger
 /**
  * Shared WhatsApp Max session helper for the dial path.
  *
- * Single place for the pre-flight refresh discipline every other
- * WACRM writer already follows: use the stored access token while
- * it lives, rotate it via the refresh token when it is expired (or
- * dies within [WacrmAuth.REFRESH_SKEW_MS]), preserving identity
- * fields and re-syncing recording policies after a rotation.
+ * Thin wrapper over [WacrmSessionRefresh] (the single process-wide
+ * refresh): use the stored access token while it lives, rotate it via
+ * the refresh token when it is expired (or dies within
+ * [WacrmAuth.REFRESH_SKEW_MS]), preserving identity fields and
+ * re-syncing recording policies after a rotation.
  *
  * No tokens are ever logged (see LogRedaction).
  */
@@ -41,36 +41,31 @@ object DialSession {
      * responses carry no new identity.
      */
     fun refresh(appContext: Context, baseUrl: String): WacrmSession.Session? {
-        val current = WacrmSession.get(appContext) ?: return null
         val config = WacrmAuth.fetchMobileConfig(baseUrl)
         if (config == null) {
             AppLogger.w(TAG, "Dial: refresh impossible (no mobile config)")
             return null
         }
-        return when (val outcome = WacrmAuth.refresh(config, current.refreshToken)) {
-            is WacrmAuth.AuthOutcome.Ok -> {
-                WacrmSession.save(
-                    appContext,
-                    outcome.session.accessToken,
-                    outcome.session.refreshToken,
-                    outcome.session.expiresAtMs,
-                    current.userId,
-                    current.userEmail,
-                    current.userName,
-                    current.accountId,
-                    current.accountName,
-                    current.role,
-                )
+        return when (val outcome = WacrmSessionRefresh.refreshIfNeeded(appContext, config, force = true)) {
+            is WacrmSessionRefresh.SessionResult.Valid -> {
                 WhatsappSourceSync.syncAfterAuth(
                     appContext,
                     baseUrl,
-                    outcome.session.accessToken
+                    outcome.session.accessToken,
+                    deviceId = DialDeviceId.get(appContext)
                 )
                 AppLogger.i(TAG, "Dial: session refreshed")
-                WacrmSession.get(appContext)
+                outcome.session
             }
             else -> {
-                AppLogger.w(TAG, "Dial: refresh rejected (${outcome.javaClass.simpleName}); reconnect required")
+                AppLogger.w(TAG, "Dial: refresh not usable (${outcome.javaClass.simpleName}); reconnect may be required")
+                // Refresh failed (rejected/unreachable): the session may
+                // have been revoked server-side. The check uses the
+                // CURRENT access token only and wipes solely on an
+                // explicit revoked answer — never on a blip.
+                WacrmSession.get(appContext)?.accessToken?.let { token ->
+                    WacrmDeviceAuth.checkStatusAndWipeIfRevoked(appContext, baseUrl, token)
+                }
                 null
             }
         }

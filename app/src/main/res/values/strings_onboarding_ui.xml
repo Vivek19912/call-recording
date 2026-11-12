@@ -11,14 +11,14 @@
     <!-- Onboarding: redesign-only UI strings for the "Signal" Disclaimer + Permissions screens. -->
 
     <!-- Disclaimer screen. -->
-    <string name="disclaimer_ui_hero_subtitle">FOSS call recording, on your terms. Please review the disclaimer before you continue.</string>
-    <string name="disclaimer_ui_body_header">Disclaimer</string>
+    <string name="disclaimer_ui_hero_subtitle">Record and manage your calls responsibly. Please review the notice before you continue.</string>
+    <string name="disclaimer_ui_body_header">RESPONSIBLE USE &amp; DISCLAIMER</string>
     <string name="disclaimer_ui_scroll_hint">Scroll to the end to enable the checkbox.</string>
 
     <!-- Permissions screen. -->
     <string name="permissions_ui_eyebrow">Setup</string>
     <string name="permissions_ui_hero_title">Let’s get set up</string>
-    <string name="permissions_ui_hero_subtitle">A few permissions so CallVault can capture and label your calls. Approve each item below.</string>
+    <string name="permissions_ui_hero_subtitle">A few permissions so Call Recorder can capture and label your calls. Approve each item below.</string>
     <string name="permissions_ui_section_label">Permissions</string>
     <string name="permission_adb_hint">Tap Authorize, then enter the pairing code from the notification.</string>
     <string name="permission_adb_desc_short">Required to set up the recorder. Needs Wi-Fi.</string>

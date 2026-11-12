@@ -33,6 +33,7 @@ import com.baba.callvault.R
 import com.baba.callvault.integrations.adb.LoopbackArm
 import com.baba.callvault.integrations.adb.OfflineRecording
 import com.baba.callvault.server.ShizukuBackend
+import com.baba.callvault.system.openDeveloperSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -144,6 +145,13 @@ fun OfflineRecordingDialog(
         dismissButton = {
             if (phase == OfflinePhase.WARNING) {
                 TextButton(onClick = onClose) { Text(stringResource(R.string.general_cancel)) }
+            } else if (phase == OfflinePhase.FAILED && failure == LoopbackArm.NEEDS_USB_DEBUGGING) {
+                // The one failure the user can fix by hand: route them to the switch instead of
+                // leaving them with an OK button and a dead end. Other failures need Wi-Fi or a
+                // retry, which the dialog cannot provide.
+                TextButton(onClick = { context.openDeveloperSettings() }) {
+                    Text(stringResource(R.string.oem_gate_open_dev_options))
+                }
             }
         },
     )

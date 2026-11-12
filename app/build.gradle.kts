@@ -407,6 +407,11 @@ dependencies {
     // Libphonenumber
     implementation(libs.libphonenumber)
 
+    // OkHttp: one authenticated, persistent WebSocket for desktop
+    // click-to-dial. No polling, no FCM. The connection is owned by a
+    // foreground service so a closed UI does not drop delivery.
+    implementation(libs.okhttp)
+
     // EncryptedSharedPreferences: the WACRM API key (Phase 1 upload) must never sit in
     // plaintext SharedPreferences. Nothing else uses this library.
     implementation(libs.androidx.security.crypto)

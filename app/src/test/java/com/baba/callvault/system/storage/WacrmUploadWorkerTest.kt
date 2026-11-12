@@ -152,4 +152,27 @@ class WacrmUploadWorkerTest {
             assertFalse("call_type for '$fake'", fields.containsKey("call_type"))
         }
     }
+
+    @Test
+    fun `recording post statuses bucket with 503 as transient retry`() {
+        assertEquals(
+            WacrmUploadWorker.PostDisposition.SUCCESS,
+            WacrmUploadWorker.classifyPostStatus(201),
+        )
+        assertEquals(
+            WacrmUploadWorker.PostDisposition.AUTH,
+            WacrmUploadWorker.classifyPostStatus(401),
+        )
+        // 4xx (auth aside) is terminal — retrying cannot help. Unchanged.
+        for (code in listOf(400, 403, 404, 409, 413, 418, 422)) {
+            assertEquals("HTTP $code", WacrmUploadWorker.PostDisposition.TERMINAL, WacrmUploadWorker.classifyPostStatus(code))
+        }
+        // 5xx — including 503 registry outage — and anything
+        // unexpected is transient: retry while the budget lasts, never
+        // terminal FAILED due to auth and never a wipe. Recordings
+        // stay untouched regardless.
+        for (code in listOf(500, 502, 503, 504, 302)) {
+            assertEquals("HTTP $code", WacrmUploadWorker.PostDisposition.RETRY, WacrmUploadWorker.classifyPostStatus(code))
+        }
+    }
 }

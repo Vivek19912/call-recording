@@ -579,10 +579,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     // -------- In-app updates
 
-    /** Turn the daily update check on or off (also schedules/cancels the periodic worker). */
+    /** Update checks are permanently disabled: any enable request is forced OFF (also schedules/cancels the periodic worker and clears a stale tag). */
     override fun setUpdateCheckEnabled(enabled: Boolean) {
-        preferences.setUpdateCheckEnabled(enabled)
-        if (!enabled) preferences.setAvailableUpdateTag(null)
+        preferences.setUpdateCheckEnabled(false)
+        preferences.setAvailableUpdateTag(null)
         UpdateScheduler.apply(appContext)
         refresh()
     }

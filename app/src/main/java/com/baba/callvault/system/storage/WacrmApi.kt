@@ -8,6 +8,7 @@
 
 package com.baba.callvault.system.storage
 
+import com.baba.callvault.BuildConfig
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
@@ -62,10 +63,20 @@ object WacrmApi {
         if (trimmed.isEmpty()) return null
         return runCatching {
             val uri = URI(trimmed)
-            if (!uri.scheme.equals("https", ignoreCase = true)) return null
+            val scheme = uri.scheme?.lowercase() ?: return null
             val host = uri.host?.takeIf { it.isNotEmpty() } ?: return null
-            val port = if (uri.port == 443 || uri.port == -1) "" else ":${uri.port}"
-            "https://$host$port"
+            // Production is HTTPS-only. Debug builds additionally accept
+            // cleartext to loopback so `adb reverse` can exercise the full
+            // socket pipeline against a local backend; no other host and no
+            // release build ever permits it.
+            val loopback = host == "127.0.0.1" || host == "localhost" || host == "10.0.2.2"
+            val allowed = scheme == "https" || (BuildConfig.DEBUG && scheme == "http" && loopback)
+            if (!allowed) return null
+            val defaultPort =
+                (scheme == "https" && uri.port == 443) ||
+                    (scheme == "http" && uri.port == 80)
+            val port = if (uri.port == -1 || defaultPort) "" else ":${uri.port}"
+            "$scheme://$host$port"
         }.getOrNull()
     }
 
@@ -107,7 +118,9 @@ object WacrmApi {
     fun postCallEvent(
         baseUrl: String,
         bearerCredential: String,
-        fields: Map<String, String>,
+        fields: Map<String, Any>,
+        /** Stable per-install id for server-driven sign-out; header only, never logged. */
+        deviceId: String? = null,
         openConnection: (String) -> HttpURLConnection = { url ->
             @Suppress("UsePropertyAccessSyntax")
             (URI(url).toURL().openConnection() as HttpURLConnection)
@@ -121,6 +134,7 @@ object WacrmApi {
         connection.connectTimeout = CONNECT_TIMEOUT_MS
         connection.readTimeout = READ_TIMEOUT_MS
         connection.setRequestProperty("Authorization", "Bearer $bearerCredential")
+        if (deviceId != null) connection.setRequestProperty(WacrmDeviceAuth.DEVICE_ID_HEADER, deviceId)
         connection.setRequestProperty("Content-Type", "application/json")
         connection.setRequestProperty("Accept", "application/json")
         connection.outputStream.use { it.write(body) }
@@ -134,18 +148,30 @@ object WacrmApi {
     }
 
     /**
-     * Encodes flat string fields as a JSON object. Pure — unit tested. Keys and values are
+     * Encodes flat fields as a JSON object. Pure — unit tested. Keys and values are
      * device data (phone digits, wire enums, timestamps); credentials never pass through here.
+     *
+     * Numbers ([Long]/[Int]/[Short]/[Byte]) are emitted as raw JSON
+     * numbers — `duration_seconds` must reach the server unquoted.
+     * Strings are quoted with escaping. Anything else is omitted,
+     * never coerced: a mis-typed value must not silently become a
+     * string the server rejects (or a number it misreads).
      */
-    fun buildJsonObject(fields: Map<String, String>): String = buildString {
+    fun buildJsonObject(fields: Map<String, Any?>): String = buildString {
         append('{')
-        fields.entries.forEachIndexed { index, (key, value) ->
-            if (index > 0) append(',')
+        var first = true
+        for ((key, value) in fields) {
+            val rendered = when (value) {
+                is String -> "\"" + buildString { appendJsonEscaped(value) } + "\""
+                is Long, is Int, is Short, is Byte -> value.toString()
+                else -> null
+            } ?: continue
+            if (!first) append(',')
+            first = false
             append('"')
             appendJsonEscaped(key)
-            append("\":\"")
-            appendJsonEscaped(value)
-            append('"')
+            append("\":")
+            append(rendered)
         }
         append('}')
     }
@@ -181,6 +207,8 @@ object WacrmApi {
         fileName: String,
         fileMime: String,
         fields: Map<String, String>,
+        /** Stable per-install id for server-driven sign-out; header only, never logged. */
+        deviceId: String? = null,
         openConnection: (String) -> HttpURLConnection = { url ->
             @Suppress("UsePropertyAccessSyntax")
             (URI(url).toURL().openConnection() as HttpURLConnection)
@@ -194,6 +222,7 @@ object WacrmApi {
         connection.connectTimeout = CONNECT_TIMEOUT_MS
         connection.readTimeout = READ_TIMEOUT_MS
         connection.setRequestProperty("Authorization", "Bearer $bearerCredential")
+        if (deviceId != null) connection.setRequestProperty(WacrmDeviceAuth.DEVICE_ID_HEADER, deviceId)
         connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
         connection.setRequestProperty("Accept", "application/json")
         // Unknown total up front (streamed body): chunked mode avoids buffering the entity.

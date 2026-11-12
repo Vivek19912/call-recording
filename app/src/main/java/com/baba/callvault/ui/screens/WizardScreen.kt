@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
@@ -67,7 +66,6 @@ import com.baba.callvault.R
 import com.baba.callvault.data.AppPreferences
 import com.baba.callvault.data.StorageTarget
 import com.baba.callvault.data.SyncScheduleMode
-import com.baba.callvault.system.updates.UpdateScheduler
 import com.baba.callvault.integrations.scrcpy.AUDIO_BIT_RATE_OPTIONS
 import com.baba.callvault.transcription.TranscriptionScheduler
 import com.baba.callvault.transcription.model.DownloadableModel
@@ -154,9 +152,6 @@ fun WizardScreen(
     val syncHour = remember(updateTrigger) { viewModel.preferences.getSyncTimeHour() }
     val syncMinute = remember(updateTrigger) { viewModel.preferences.getSyncTimeMinute() }
     val syncDayOfWeek = remember(updateTrigger) { viewModel.preferences.getSyncDayOfWeek() }
-    val carrierRecording = remember(updateTrigger) { viewModel.preferences.isCarrierRecordingEnabled() }
-    val autoRecordIncoming = remember(updateTrigger) { viewModel.preferences.isAutoRecordIncomingEnabled() }
-    val autoRecordOutgoing = remember(updateTrigger) { viewModel.preferences.isAutoRecordOutgoingEnabled() }
     val audioCodec = remember(updateTrigger) { viewModel.preferences.getAudioCodec() }
     val audioBitRate = remember(updateTrigger) { viewModel.preferences.getAudioBitRate() }
     val fileNameTemplate = remember(updateTrigger) { viewModel.preferences.getFileNameTemplate() }
@@ -245,17 +240,8 @@ fun WizardScreen(
                         onSelectMinute = viewModel::setSyncTimeMinute,
                         onSelectDayOfWeek = viewModel::setSyncDayOfWeek
                     )
-                    WizardStep.AUTO_RECORD -> AutoRecordStep(
-                        carrier = carrierRecording,
-                        incoming = autoRecordIncoming,
-                        outgoing = autoRecordOutgoing,
-                        onCarrierChange = viewModel::setCarrierRecording,
-                        onIncomingChange = viewModel::setAutoRecordIncoming,
-                        onOutgoingChange = viewModel::setAutoRecordOutgoing
-                    )
                     WizardStep.RELIABILITY -> ReliabilityStep()
                     WizardStep.EXPERIMENTAL -> ExperimentalStep()
-                    WizardStep.UPDATES -> UpdatesStep()
                     WizardStep.AUDIO -> AudioStep(
                         audioCodec = audioCodec,
                         audioBitRate = audioBitRate,
@@ -266,12 +252,6 @@ fun WizardScreen(
                         template = fileNameTemplate,
                         onSelectTemplate = viewModel::setFileNameTemplate
                     )
-                    WizardStep.TRANSCRIPTION -> TranscriptionStep(
-                        updateTrigger = updateTrigger,
-                        onDownloadModel = viewModel::downloadModel,
-                        onCancelModelDownload = viewModel::cancelModelDownload,
-                        onDeleteModel = viewModel::deleteModel
-                    )
                 }
             }
         }
@@ -279,7 +259,7 @@ fun WizardScreen(
 }
 
 /** The logical steps of the wizard (two of them are conditionally included — see [wizardSteps]). */
-internal enum class WizardStep { STORAGE, SCHEDULE, AUTO_RECORD, RELIABILITY, EXPERIMENTAL, AUDIO, FILE_NAME, TRANSCRIPTION, UPDATES }
+internal enum class WizardStep { STORAGE, SCHEDULE, RELIABILITY, EXPERIMENTAL, AUDIO, FILE_NAME }
 
 /**
  * The visible step list, in order. Kept a pure function so the two exclusions are testable and stay
@@ -298,26 +278,18 @@ internal enum class WizardStep { STORAGE, SCHEDULE, AUTO_RECORD, RELIABILITY, EX
 internal fun wizardSteps(usesDrive: Boolean, usesEmbeddedAdb: Boolean): List<WizardStep> = buildList {
     add(WizardStep.STORAGE)
     if (usesDrive) add(WizardStep.SCHEDULE)
-    add(WizardStep.AUTO_RECORD)
     if (usesEmbeddedAdb) add(WizardStep.RELIABILITY)
     add(WizardStep.EXPERIMENTAL)
     add(WizardStep.AUDIO)
     add(WizardStep.FILE_NAME)
-    // Follows the recording's own life: captured, encoded, named, and then read. It is unconditional
-    // because transcription needs nothing from ADB — it is the one flagship feature a fresh install
-    // would otherwise never hear about, since the What's New dialog only fires after an *update*.
-    add(WizardStep.TRANSCRIPTION)
-    add(WizardStep.UPDATES)
 }
 
 /**
  * Whether Next (or Finish, on the last step) is enabled on [step].
  *
  * Storage is the only step that can withhold it, and only because a recording with nowhere to go is
- * not a setup that works. Everything else is a preference, an opt-in or — since the transcription
- * step started offering them — a download, and **a download must never gate setup**: the summariser
- * is 3.46 GB over an unmetered network, so a user on mobile data would be held on step seven of nine
- * until they got home. The work continues on its own; the wizard has no reason to wait for it.
+ * not a setup that works. Everything else is a preference or an opt-in, and none of them is a
+ * reason to refuse to finish setting the app up.
  *
  * A pure function for the same reason [wizardSteps] is one — it is a rule about the wizard rather
  * than a piece of its drawing, and this is the shape a test can hold on to.
@@ -741,59 +713,6 @@ private fun ScheduleStep(
     }
 }
 
-@Composable
-private fun AutoRecordStep(
-    carrier: Boolean,
-    incoming: Boolean,
-    outgoing: Boolean,
-    onCarrierChange: (Boolean) -> Unit,
-    onIncomingChange: (Boolean) -> Unit,
-    onOutgoingChange: (Boolean) -> Unit
-) {
-    val context = LocalContext.current
-    // The VoIP switch owns its own persistence (and its consent dialog), so this mirrors it only to
-    // answer the one question this step now has to answer: will anything be recorded at all?
-    var voip by remember { mutableStateOf(AppPreferences(context).isVoipRecordingEnabled()) }
-
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        // Offered here and not only in Settings because the wizard cannot be re-run, and someone
-        // installing CallVault for app calls alone wants this on day one — otherwise their first
-        // week is a Record prompt on every phone call they take.
-        ToggleCard(
-            title = stringResource(R.string.settings_carrier_recording),
-            description = stringResource(R.string.settings_carrier_recording_description),
-            checked = carrier,
-            onCheckedChange = onCarrierChange
-        )
-        if (carrier) {
-            ToggleCard(
-                title = stringResource(R.string.settings_auto_record_incoming),
-                description = stringResource(R.string.wizard_ui_auto_incoming_desc),
-                checked = incoming,
-                onCheckedChange = onIncomingChange
-            )
-            ToggleCard(
-                title = stringResource(R.string.settings_auto_record_outgoing),
-                description = stringResource(R.string.wizard_ui_auto_outgoing_desc),
-                checked = outgoing,
-                onCheckedChange = onOutgoingChange
-            )
-        }
-
-        // App calls belong beside phone calls: they are the same decision — what gets recorded — and
-        // splitting them across two steps is exactly how someone reached Finish with both off. The very
-        // switch Settings renders, so the consent confirmation and the Shizuku greying come with it.
-        CvCard { VoipRecordingToggle(onEnabledChange = { voip = it }) }
-
-        // Said, not enforced. Finish stays enabled because in Shizuku mode the app-call switch cannot be
-        // turned on at all, so gating here would strand that user on a step they cannot satisfy. With
-        // both off nothing is ever recorded — a legitimate choice to make, but not one to make silently.
-        if (!carrier && !voip) {
-            WarningCard(stringResource(R.string.wizard_auto_record_nothing_warning))
-        }
-    }
-}
-
 /**
  * The experimental opt-ins, mirroring Settings ▸ General ▸ Experimental so the two group them alike.
  *
@@ -809,29 +728,6 @@ private fun AutoRecordStep(
 private fun ExperimentalStep() {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         CvCard { HandoffPersistToggle() }
-    }
-}
-
-/** Whether CallVault checks GitHub for new releases. Off-by-default settings need asking about once. */
-@Composable
-private fun UpdatesStep() {
-    val context = LocalContext.current
-    val prefs = remember { AppPreferences(context) }
-    var enabled by remember { mutableStateOf(prefs.isUpdateCheckEnabled()) }
-    CvCard {
-        SettingsToggleRow(
-            icon = Icons.Filled.SystemUpdate,
-            label = stringResource(R.string.settings_update_check_label),
-            description = stringResource(R.string.settings_update_check_description),
-            checked = enabled,
-            onCheckedChange = { turnOn ->
-                enabled = turnOn
-                prefs.setUpdateCheckEnabled(turnOn)
-                // Reconcile the periodic worker immediately, exactly as Settings does — persisting the
-                // flag alone would leave the schedule disagreeing with it.
-                UpdateScheduler.apply(context)
-            },
-        )
     }
 }
 
@@ -992,171 +888,25 @@ private fun FileNameStep(
     }
 }
 
-/**
- * Transcription and summaries: when they run, in which language, and — now — their models.
- *
- * Here at all because a fresh install has no other route to either feature — the What's New dialog
- * needs an *update* to fire, and the wizard cannot be re-run, so a step omitted here leaves the
- * flagship of this release buried in a Settings accordion nobody was told to open.
- *
- * Every control is Settings' own composable, not a wizard copy of it: the mode dropdown carries the
- * "this is slow and heavy" confirmation, the language dropdown carries the auto-detect warning, and
- * the summariser's rows carry the requirements dialog that guards 3.46 GB. A copy that lost any of
- * those would be a copy that lies — the same reason [ExperimentalStep] shares its toggle and
- * [ReliabilityStep] shares the offline switch, both after a hand-rolled version had already dropped
- * the half that mattered.
- *
- * **The downloads start here and nothing waits for them.** The step used to say the button was in
- * Settings, which asked someone who has just been told about the feature to go and find it later.
- * They are WorkManager jobs on an unmetered network, so Next and Finish stay enabled throughout
- * ([canAdvanceFrom] never asks about this step) and the download carries on while the user finishes
- * setup and lands on Home.
- *
- * @param updateTrigger Bumped by the view model after each write, which re-reads the filesystem
- *   under the model rows — deleting a model touches no WorkManager state, so nothing else would.
- */
-@Composable
-private fun TranscriptionStep(
-    updateTrigger: Int,
-    onDownloadModel: (DownloadableModel) -> Unit,
-    onCancelModelDownload: (DownloadableModel) -> Unit,
-    onDeleteModel: (DownloadableModel) -> Unit
-) {
-    val context = LocalContext.current
-    val prefs = remember { AppPreferences(context) }
-    var mode by remember { mutableStateOf(prefs.getTranscriptionMode()) }
-    var language by remember { mutableStateOf(prefs.getTranscriptionLanguage()) }
-    var modelId by remember { mutableStateOf(prefs.getTranscriptionModelId()) }
-    val selectedModel = TranscriptionModel.fromId(modelId) ?: TranscriptionModel.DEFAULT
-
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        CvCard(contentPadding = PaddingValues(vertical = 8.dp)) {
-            TranscriptionModeField(
-                mode = mode,
-                onModeChange = { chosen ->
-                    mode = chosen
-                    prefs.setTranscriptionMode(chosen)
-                    // Reconcile the sweep immediately, exactly as Settings does — persisting the mode
-                    // alone would leave WorkManager disagreeing with it until something else ran.
-                    TranscriptionScheduler.apply(context)
-                }
-            )
-            TranscriptionLanguageField(
-                language = language,
-                onLanguageChange = { chosen ->
-                    language = chosen
-                    prefs.setTranscriptionLanguage(chosen)
-                }
-            )
-
-            // Offered here because the download row below fetches whatever this says. Told to pick a
-            // model without being told which one is coming, the difference between 190 MB and 874 MB
-            // would arrive as a surprise on a metered month.
-            TranscriptionModelField(
-                modelId = modelId,
-                onModelChange = { chosen ->
-                    modelId = chosen
-                    prefs.setTranscriptionModelId(chosen)
-                }
-            )
-
-            TranscriptionModelRows(
-                model = selectedModel,
-                updateTrigger = updateTrigger,
-                onDownload = onDownloadModel,
-                onCancel = onCancelModelDownload,
-                onDelete = onDeleteModel
-            )
-        }
-
-        // Said even though the field already shows the language: the value arrived without being asked
-        // for, and a pre-filled answer nobody explains is one people scroll past rather than check.
-        // Only when there IS a pre-filled answer — a phone set to a language the app does not offer
-        // lands on auto-detect, and the field's own warning is the right thing to read there.
-        if (language != null) {
-            NoteCard(stringResource(R.string.wizard_transcription_language_note))
-        }
-
-        // Built from the catalogue, not written out. This note used to name SMALL_Q5_1 and
-        // LARGE_V3_TURBO_Q5_0 by hand into a four-argument format string, which meant adding a third
-        // tier compiled cleanly and left the wizard quietly describing two of three models forever —
-        // the one place in the transcription UI with no `when` to fail on. The dropdown right above
-        // it already offered the model this note did not mention.
-        //
-        // `map` rather than `joinToString`, because only the inline one lets `stringResource` be
-        // called per entry; the join then runs over plain strings.
-        val modelSizes = TranscriptionModel.entries.map { model ->
-            stringResource(
-                R.string.wizard_transcription_model_size,
-                stringResource(TranscriptionLabels.titleOf(model)),
-                model.sizeBytes / BYTES_PER_MB
-            )
-        }
-        // A new key rather than the old one narrowed to one argument: the ten values-* files still
-        // hold a four-placeholder translation of `wizard_transcription_model_note`, and feeding a
-        // one-argument call to a locale's %2$d throws rather than degrading.
-        NoteCard(
-            stringResource(
-                R.string.wizard_transcription_model_sizes_note,
-                modelSizes.joinToString(stringResource(R.string.list_separator))
-            )
-        )
-
-        // A card of its own rather than the single sentence that used to be here. Summaries are half
-        // of what this step is for, and a footnote pointing at Settings is how a feature ends up
-        // never being found. The rows are the summariser's own, so the requirements dialog — 3.46 GB
-        // to download, about 3.5 GB of memory to run — still stands between the tap and the fetch.
-        CvCard(contentPadding = PaddingValues(vertical = 8.dp)) {
-            Text(
-                text = stringResource(R.string.wizard_transcription_summary_heading),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-            )
-            Text(
-                text = stringResource(R.string.wizard_transcription_summary_body),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 16.dp)
-            )
-            SummaryRows(
-                updateTrigger = updateTrigger,
-                onDownload = onDownloadModel,
-                onCancel = onCancelModelDownload,
-                onDelete = onDeleteModel
-            )
-        }
-
-        // Last, and about both downloads: whatever was started here does not have to finish here.
-        NoteCard(stringResource(R.string.wizard_transcription_background_note))
-    }
-}
 
 // ── String-resource mappers ───────────────────────────────────────────────────────────────────
 
 private fun stepTitleRes(step: WizardStep): Int = when (step) {
     WizardStep.STORAGE -> R.string.wizard_storage_title
     WizardStep.SCHEDULE -> R.string.wizard_schedule_title
-    WizardStep.AUTO_RECORD -> R.string.wizard_auto_record_title
     WizardStep.RELIABILITY -> R.string.wizard_reliability_title
     WizardStep.EXPERIMENTAL -> R.string.wizard_experimental_title
-    WizardStep.UPDATES -> R.string.wizard_updates_title
     WizardStep.AUDIO -> R.string.wizard_audio_title
     WizardStep.FILE_NAME -> R.string.wizard_filename_title
-    WizardStep.TRANSCRIPTION -> R.string.wizard_transcription_title
 }
 
 private fun stepSubtitleRes(step: WizardStep): Int = when (step) {
     WizardStep.STORAGE -> R.string.wizard_storage_subtitle
     WizardStep.SCHEDULE -> R.string.wizard_schedule_subtitle
-    WizardStep.AUTO_RECORD -> R.string.wizard_auto_record_subtitle
     WizardStep.RELIABILITY -> R.string.wizard_reliability_subtitle
     WizardStep.EXPERIMENTAL -> R.string.wizard_experimental_subtitle
-    WizardStep.UPDATES -> R.string.wizard_updates_subtitle
     WizardStep.AUDIO -> R.string.wizard_audio_subtitle
     WizardStep.FILE_NAME -> R.string.wizard_filename_subtitle
-    WizardStep.TRANSCRIPTION -> R.string.wizard_transcription_subtitle
 }
 
 private fun storageTargetTitleRes(target: StorageTarget): Int = when (target) {

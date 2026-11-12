@@ -239,7 +239,7 @@ object RecorderBackend {
 
         val voipArmed = when {
             !connected -> false
-            !AppPreferences(context).isVoipRecordingEnabled() -> true
+            !AppPreferences(context).isVoipRecordingEnabled() && !VoipCaptureController.isOwnerWhatsappSelected(context) -> true
             else -> runCatching { VoipCaptureController.sync(context) }
                 .onFailure { AppLogger.w(TAG, "VoIP arming after the switch failed: ${it.message}") }
                 .getOrDefault(false)

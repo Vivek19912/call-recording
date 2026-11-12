@@ -15,8 +15,6 @@ import com.baba.callvault.integrations.adb.ShellGrantGate
 import android.net.Uri
 import android.text.format.DateUtils
 import android.widget.Toast
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,18 +23,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
-import androidx.compose.material3.Surface
 import com.baba.callvault.integrations.adb.AdbPairingService
 import com.baba.callvault.system.openWirelessDebugging
 import com.baba.callvault.data.merge.MergeCandidates
 import com.baba.callvault.data.recordings.AudioImport
 import com.baba.callvault.data.recordings.DeleteScope
 import com.baba.callvault.data.recordings.RecordingSelection
-import com.baba.callvault.system.openKofi
-import com.baba.callvault.system.openTelegramGroup
 import com.baba.callvault.ui.common.DeleteScopeStateSaver
 import com.baba.callvault.ui.common.M3DropdownField
 import com.baba.callvault.ui.common.OptionItem
@@ -71,7 +65,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.filled.CheckCircle
@@ -284,10 +277,6 @@ fun HomeScreen(
     viewModel: HomeViewModel = viewModel()
 ) {
     val context = LocalContext.current
-    // Where the Telegram invite currently lives. Read once and held, so the long-press moves it under
-    // the user's finger instead of on the next recomposition that happens to come along.
-    val preferences = remember(context) { AppPreferences(context) }
-    var communityTucked by rememberSaveable { mutableStateOf(preferences.isCommunityTucked()) }
     val uiState by viewModel.uiState.collectAsState()
 
     /**
@@ -331,10 +320,8 @@ fun HomeScreen(
 
     val playback by viewModel.playback.collectAsState()
 
-    // Two separate flags, not one: the chooser is opened by the user tapping Support, the appeal
-    // arrives on its own after a release note. Sharing a flag would let dismissing one suppress the
-    // other in the same session.
-    var showSupport by rememberSaveable { mutableStateOf(false) }
+    // Shown on its own after a release note. Kept even though the header pill is gone:
+    // the dialog is support functionality, not the removed header element.
     var showSupportAppeal by rememberSaveable { mutableStateOf(false) }
 
     // Multi-selection, keyed by each row's primary Uri. Empty means normal browsing; the moment it
@@ -872,32 +859,15 @@ fun HomeScreen(
         }
     }
 
-    // The pill beside the title, on whichever section is showing. One slot, two claimants:
-    // transcription wins while it is working, because it is transient and explains something
-    // happening right now, whereas the support pill is always there and loses nothing by waiting.
-    val titleTrailing: @Composable () -> Unit = {
+    // The pill beside the title, on whichever section is showing. Only transcription occupies
+    // this slot now; the Support pill was removed. Null when idle so the header spacing collapses
+    // naturally instead of leaving an empty gap.
+    val titleTrailing: (@Composable () -> Unit)? =
         if (transcribingShown.occupiesTitleSlot) {
-            TranscribingPill(state = transcribingShown, onClick = { showTranscribingSheet = true })
+            { TranscribingPill(state = transcribingShown, onClick = { showTranscribingSheet = true }) }
         } else {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                SupportPill(onClick = { showSupport = true })
-                // Where the Telegram card goes when the user long-presses it away — moved, not dismissed,
-                // because someone who tucks it away has usually joined and may still want the way back.
-                // Long-pressing here undoes it, which is the only way back: nothing else mentions it.
-                if (communityTucked) {
-                    Spacer(Modifier.width(8.dp))
-                    CommunityPill(
-                        onClick = { context.openTelegramGroup() },
-                        onLongClick = {
-                            preferences.setCommunityTucked(false)
-                            communityTucked = false
-                            Toast.makeText(context, R.string.home_community_restored_hint, Toast.LENGTH_SHORT).show()
-                        },
-                    )
-                }
-            }
+            null
         }
-    }
 
     // One section at a time, and none of them while a recording is open over the lot — or while a
     // transcript is being read on a page of its own, which likewise replaces the section rather than
@@ -908,31 +878,12 @@ fun HomeScreen(
     if (playbackFor == null && readingFor == null) when (section) {
 
     HomeSection.Hub -> {
-        // Re-read on arrival rather than once for the life of the shell. The guard inside
-        // LibraryCounts answers "is there a transcripts database?" at the moment it is called, and a
-        // flow remembered before the user's first transcription would keep answering zero until the
-        // app was restarted. Keyed on the section, so every visit to the hub asks again — and the
-        // hub is the only thing that asks at all.
-        val transcriptsCount by remember(section) { LibraryCounts.transcribed(context) }
-            .collectAsState(initial = 0)
-        val summariesCount by remember(section) { LibraryCounts.summarised(context) }
-            .collectAsState(initial = 0)
-
         HubScreen(
             modifier = modifier,
             recordingsCount = uiState.recordings.size,
-            transcriptsCount = transcriptsCount,
-            summariesCount = summariesCount,
             listState = hubGridState,
             onOpenSection = onSelectSection,
             onOpenSettings = onOpenSettings,
-            onOpenCommunity = { context.openTelegramGroup() },
-            onTuckCommunity = {
-                preferences.setCommunityTucked(true)
-                communityTucked = true
-                Toast.makeText(context, R.string.home_community_tucked_hint, Toast.LENGTH_LONG).show()
-            },
-            communityTucked = communityTucked,
             titleTrailing = titleTrailing,
             // The state of the app, all on the page a notification about it now lands on. Kept off
             // the recordings list rather than drawn in both places: a banner in two places is two
@@ -984,14 +935,10 @@ fun HomeScreen(
                             onDismiss = { viewModel.dismissUpdatedBanner() }
                         )
                     }
-                    uiState.availableUpdateTag?.let { tag ->
-                        UpdateBannerCard(
-                            tag = tag,
-                            isInstalling = uiState.isUpdateInstalling,
-                            progressPercent = uiState.updateProgressPercent,
-                            onUpdate = { viewModel.installAvailableUpdate() }
-                        )
-                    }
+                    // The "Update available" banner is permanently hidden on the home screen by
+                    // product requirement. The update mechanism, version checking and installation
+                    // in HomeViewModel are intentionally left untouched; only this banner UI is
+                    // suppressed, on every path, regardless of update status.
                 }
             },
         )
@@ -1395,9 +1342,6 @@ fun HomeScreen(
             },
             onDismiss = { showBulkDelete = false },
         )
-    }
-    if (showSupport) {
-        SupportDialog(onDismiss = { showSupport = false })
     }
     // The appeal follows the release note rather than replacing it: the note is the reason the
     // user has the app open, and asking mid-note would bury what changed.
@@ -2137,10 +2081,10 @@ private fun UsbReliabilityAdvisoryCard(fixing: Boolean, blockedByRecording: Bool
 }
 
 /**
- * Slim banner shown under the hero card when a newer release is known. Tapping Update downloads,
- * verifies, and installs it (system confirm dialog may appear); while working the action shows a
- * small progress spinner. Auto-update users normally never see this — it appears only when the
- * silent path couldn't run (e.g. metered network or the shell being unavailable).
+ * The "Update available" banner UI. Permanently hidden on the home screen by product requirement
+ * (see the Hub statusCards block, which deliberately never calls this). Kept — rather than deleted —
+ * so the underlying update mechanism, version checking and installation in HomeViewModel stay
+ * untouched; only its visibility is suppressed.
  */
 @Composable
 private fun UpdateBannerCard(
@@ -2200,74 +2144,6 @@ private fun UpdateBannerCard(
                     Text(stringResource(R.string.home_update_banner_button))
                 }
             }
-        }
-    }
-}
-
-/**
- * A compact, tappable "♥ Support" pill shown next to the app title. Opens the maintainer's Ko-fi
- * page in the browser — an optional, low-key donation entry point that keeps the status card and the
- * recordings list uncluttered. The matching, more explicit ask lives in Settings → About.
- */
-/**
- * The tucked-away Telegram invite. Deliberately quieter than [SupportPill]: it is a way back to something
- * the user has already seen, not a second thing asking for their attention.
- */
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun CommunityPill(onClick: () -> Unit, onLongClick: () -> Unit) {
-    val accent = LocalCvBrand.current.accent
-    Surface(
-        shape = CircleShape,
-        color = accent.copy(alpha = 0.12f),
-        modifier = Modifier.clip(CircleShape).combinedClickable(onClick = onClick, onLongClick = onLongClick),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.Send,
-                contentDescription = null,
-                tint = accent,
-                modifier = Modifier.size(15.dp),
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                text = stringResource(R.string.home_community_pill),
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium,
-                color = accent,
-            )
-        }
-    }
-}
-
-@Composable
-private fun SupportPill(onClick: () -> Unit) {
-    val accent = MaterialTheme.colorScheme.primary
-    Surface(
-        onClick = onClick,
-        shape = CircleShape,
-        color = accent.copy(alpha = 0.12f),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Favorite,
-                contentDescription = null,
-                tint = accent,
-                modifier = Modifier.size(15.dp),
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                text = stringResource(R.string.home_support_pill),
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium,
-                color = accent,
-            )
         }
     }
 }

@@ -48,14 +48,24 @@ object OfflineRecording {
             AppLogger.i(TAG, "Not arming off-Wi-Fi recording: USB debugging is off")
             return LoopbackArm.NEEDS_USB_DEBUGGING
         }
-        AppPreferences(context).setOfflineRecordingEnabled(true)
+        val prefs = AppPreferences(context)
+        // Tentatively on: the borrow below ([mayBorrowWirelessDebugging]) keys off this flag, and the
+        // arm deliberately runs while the opt-in reads enabled. A failed *fresh* setup rolls back
+        // below; a previously working setup keeps its flag so a transient re-arm failure cannot
+        // strand a configuration that can still recover.
+        val wasEnabled = prefs.isOfflineRecordingEnabled()
+        prefs.setOfflineRecordingEnabled(true)
         // The user pressed the button, so Wireless debugging may be switched on for it even if they had
         // turned it off.
         val result = AdbShell.asUserRequest { AdbShell.armLoopbackIfNeededWithReason(context) }
         if (result == LoopbackArm.ARMED) {
+            // ARMED proves USB debugging was on and the listener answered: the one-time USB
+            // onboarding this setup needed is genuinely complete.
+            prefs.setUsbOnboardingCompleted(true)
             runCatching { RecorderBackend.ensureRunning(context) }
                 .onFailure { AppLogger.w(TAG, "re-warm after enable failed: ${it.message}") }
         } else {
+            if (!wasEnabled) prefs.setOfflineRecordingEnabled(false)
             AppLogger.i(TAG, "Could not arm loopback: $result")
         }
         return result

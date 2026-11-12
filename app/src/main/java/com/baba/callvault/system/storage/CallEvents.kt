@@ -135,6 +135,7 @@ object CallEvents {
             .setInputData(data)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
+            .addTag(WacrmRemoteLogout.WACRM_WORK_TAG)
             .build()
         WorkManager.getInstance(context)
             .enqueueUniqueWork(WORK_NAME_PREFIX + clientEventId, ExistingWorkPolicy.KEEP, request)

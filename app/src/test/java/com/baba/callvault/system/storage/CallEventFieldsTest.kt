@@ -38,8 +38,46 @@ class CallEventFieldsTest {
         assertEquals("in", fields["direction"])
         assertEquals("missed", fields["outcome"])
         assertEquals("+919876543210", fields["phone_number"])
-        assertEquals("0", fields["duration_seconds"])
+        assertEquals(0L, fields["duration_seconds"])
         assertEquals("2023-11-14T22:13:20Z", fields["occurred_at"])
+    }
+
+    @Test
+    fun `duration_seconds serializes as a JSON number, everything else as strings`() {
+        val fields = CallEventWorker.eventFields(
+            clientEventId = "evt-1",
+            direction = "in",
+            outcome = "missed",
+            phoneNumber = "+919876543210",
+            durationSeconds = 0L,
+            occurredAtMillis = 1_700_000_000_000L,
+        )
+        assertEquals(
+            """{"client_event_id":"evt-1","call_type":"phone","direction":"in","outcome":"missed","phone_number":"+919876543210","duration_seconds":0,"occurred_at":"2023-11-14T22:13:20Z"}""",
+            WacrmApi.buildJsonObject(fields),
+        )
+    }
+
+    @Test
+    fun `positive durations stay numeric in answered events`() {
+        val fields = CallEventWorker.eventFields(
+            clientEventId = "evt-9",
+            direction = "out",
+            outcome = "answered",
+            phoneNumber = "+919876543210",
+            durationSeconds = 63L,
+            occurredAtMillis = 1_700_000_000_000L,
+        )
+        assertEquals(63L, fields["duration_seconds"])
+        assertTrue(WacrmApi.buildJsonObject(fields).contains("\"duration_seconds\":63"))
+    }
+
+    @Test
+    fun `non-string non-number values are omitted, never coerced`() {
+        val json = WacrmApi.buildJsonObject(
+            mapOf("client_event_id" to "evt-x", "flag" to true, "count" to 3, "gone" to null),
+        )
+        assertEquals("""{"client_event_id":"evt-x","count":3}""", json)
     }
 
     @Test
@@ -107,5 +145,26 @@ class CallEventFieldsTest {
         assertTrue((CallEvents.WORK_NAME_PREFIX + "evt-1").startsWith("call-event-"))
         // Distinct from recording uploads: an event can never collide with one.
         assertFalse(CallEvents.WORK_NAME_PREFIX == WacrmUploads.WORK_NAME_PREFIX)
+    }
+
+    @Test
+    fun `event post statuses bucket with 503 as transient retry`() {
+        // 200 (idempotent-retry answer), 201 and 409 (receipt under
+        // our idempotency key) are all terminal success.
+        for (code in listOf(200, 201, 409)) {
+            assertEquals("HTTP $code", CallEventWorker.PostDisposition.SUCCESS, CallEventWorker.classifyPostStatus(code))
+        }
+        assertEquals(CallEventWorker.PostDisposition.AUTH, CallEventWorker.classifyPostStatus(401))
+        // Other 4xx is terminal — a malformed event can never succeed
+        // on retry. Unchanged.
+        for (code in listOf(400, 403, 404, 422)) {
+            assertEquals("HTTP $code", CallEventWorker.PostDisposition.TERMINAL, CallEventWorker.classifyPostStatus(code))
+        }
+        // 5xx — including 503 registry outage — and anything
+        // unexpected is transient: retry while the budget lasts, never
+        // terminal FAILED due to auth and never a wipe.
+        for (code in listOf(500, 502, 503, 504)) {
+            assertEquals("HTTP $code", CallEventWorker.PostDisposition.RETRY, CallEventWorker.classifyPostStatus(code))
+        }
     }
 }

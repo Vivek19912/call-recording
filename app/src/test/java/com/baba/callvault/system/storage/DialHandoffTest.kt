@@ -8,10 +8,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 /**
- * Regression tests for the delivery-selection step: only
- * actionable, unexpired, dialable rows may produce a notification
- * (and therefore a `delivered` ack). An expired or finished row
- * must never notify — and must never be marked delivered.
+ * Regression tests for the WebSocket delivery path.
+ *
+ * The old foreground/WorkManager poller is gone: delivery is one
+ * authenticated WebSocket, and every signal must pass an
+ * authoritative fetch before the dialer can open. These tests pin
+ * the two pure gates around that (event policy and wire protocol)
+ * plus the existing notification/auto-open/tap safeguards.
  */
 class DialHandoffTest {
 
@@ -31,99 +34,124 @@ class DialHandoffTest {
         createdAt = "2030-01-01T00:00:00Z",
     )
 
-    @Test
-    fun `keeps pending and delivered future rows`() {
-        val selected = DialSync.selectNotifiable(
-            listOf(row(status = "pending"), row(id = "req-2", status = "delivered")),
-            1_700_000_000_000L,
-        )
-        assertEquals(listOf("req-1", "req-2"), selected.map { it.id })
-    }
+    // --- DialEventPolicy: what may reach the dialer -----------------
 
     @Test
-    fun `drops expired rows`() {
-        val selected = DialSync.selectNotifiable(
-            listOf(row(expiresAt = "2000-01-01T00:00:00Z")),
-            1_700_000_000_000L,
-        )
-        assertTrue(selected.isEmpty())
-    }
-
-    @Test
-    fun `drops finished rows`() {
-        for (status in listOf("opened", "completed", "expired", "cancelled", "failed")) {
-            val selected = DialSync.selectNotifiable(listOf(row(status = status)), 1_700_000_000_000L)
-            assertTrue("status $status must not notify", selected.isEmpty())
+    fun `policy accepts pending and delivered live rows`() {
+        for (status in listOf("pending", "delivered")) {
+            assertTrue(
+                status,
+                DialEventPolicy.isActionable(status, "2030-01-01T00:00:00Z", "+14155552671", 1_700_000_000_000L)
+            )
         }
     }
 
     @Test
-    fun `drops undialable numbers`() {
-        val selected = DialSync.selectNotifiable(listOf(row(phone = "n/a")), 1_700_000_000_000L)
-        assertTrue(selected.isEmpty())
+    fun `policy drops expired rows`() {
+        assertFalse(
+            DialEventPolicy.isActionable("pending", "2000-01-01T00:00:00Z", "+14155552671", 1_700_000_000_000L)
+        )
     }
 
     @Test
-    fun `planner directs the oldest actionable row and notifies the rest`() {
-        val handled = mutableSetOf<String>()
-        val plans = DialSync.planDeliveries(
-            listOf(row(id = "a"), row(id = "b", status = "delivered")),
-            1_700_000_000_000L, handled, allowDirect = true,
+    fun `policy drops finished rows`() {
+        for (status in listOf("opened", "completed", "expired", "cancelled", "failed")) {
+            assertFalse(
+                status,
+                DialEventPolicy.isActionable(status, "2030-01-01T00:00:00Z", "+14155552671", 1_700_000_000_000L)
+            )
+        }
+    }
+
+    @Test
+    fun `policy drops undialable numbers`() {
+        assertFalse(
+            DialEventPolicy.isActionable("pending", "2030-01-01T00:00:00Z", "n/a", 1_700_000_000_000L)
         )
-        // One auto-open per poll at most; the second row still gets
-        // its notification rather than a second dialer launch.
+    }
+
+    // --- DialSocketProtocol: URL + frame + reconnect ----------------
+
+    @Test
+    fun `builds a wss url from an https base and encodes the device id`() {
         assertEquals(
-            listOf(DialSync.DeliveryKind.DIRECT, DialSync.DeliveryKind.NOTIFY),
-            plans.map { it.kind }
+            "wss://whatsappmax.in/ws/dial?device_id=abc-123",
+            DialSocketProtocol.webSocketUrl("https://whatsappmax.in", "abc-123")
         )
-        assertEquals(setOf("a"), handled)
+        assertEquals(
+            "wss://host.test:8443/ws/dial?device_id=a+b",
+            DialSocketProtocol.webSocketUrl("https://host.test:8443/", "a b")
+        )
     }
 
     @Test
-    fun `planner never repeats an already-handled request`() {
-        val handled = mutableSetOf("a")
-        val plans = DialSync.planDeliveries(
-            listOf(row(id = "a"), row(id = "b")),
-            1_700_000_000_000L, handled, allowDirect = true,
-        )
-        assertEquals(DialSync.DeliveryKind.SKIP, plans[0].kind)
-        assertEquals(DialSync.DeliveryKind.DIRECT, plans[1].kind)
-        assertEquals(setOf("a", "b"), handled)
+    fun `refuses cleartext or unusable bases`() {
+        assertNull(DialSocketProtocol.webSocketUrl("http://whatsappmax.in", "d"))
+        assertNull(DialSocketProtocol.webSocketUrl(null, "d"))
+        assertNull(DialSocketProtocol.webSocketUrl("https://whatsappmax.in", " "))
+        assertNull(DialSocketProtocol.webSocketUrl("not a url", "d"))
     }
 
     @Test
-    fun `planner skips dead rows without consuming them`() {
-        val handled = mutableSetOf<String>()
-        val plans = DialSync.planDeliveries(
-            listOf(
-                row(id = "e1", expiresAt = "2000-01-01T00:00:00Z"),
-                row(id = "e2", phone = "n/a"),
-                row(id = "e3", status = "opened"),
-            ),
-            1_700_000_000_000L, handled, allowDirect = true,
+    fun `debug builds may use cleartext loopback only`() {
+        // adb reverse makes 127.0.0.1 reach the dev machine; debug-only.
+        assertEquals(
+            "ws://127.0.0.1:3001/ws/dial?device_id=d",
+            DialSocketProtocol.webSocketUrl("http://127.0.0.1:3001", "d")
         )
-        assertTrue(plans.all { it.kind == DialSync.DeliveryKind.SKIP })
-        assertTrue(handled.isEmpty())
+        assertNull(DialSocketProtocol.webSocketUrl("http://192.168.1.50:3001", "d"))
     }
 
     @Test
-    fun `planner falls back to notify when direct launch is not allowed`() {
-        val handled = mutableSetOf<String>()
-        val plans = DialSync.planDeliveries(
-            listOf(row(id = "a")),
-            1_700_000_000_000L, handled, allowDirect = false,
+    fun `parses a signal frame and rejects anything that cannot be an id`() {
+        val event = DialSocketProtocol.parse(
+            """{"type":"dial_request","event_id":"e1","request_id":"11111111-1111-4111-8111-111111111111","expires_at":"2030-01-01T00:00:00Z","phone_number":"+919999999999"}"""
         )
-        assertEquals(DialSync.DeliveryKind.NOTIFY, plans.single().kind)
-        // NOTIFY rows are not consumed by the planner: presenting them
-        // is the notification path's job, with its own delivered ack.
-        assertTrue(handled.isEmpty())
+        assertNotNull(event)
+        assertEquals("11111111-1111-4111-8111-111111111111", event!!.requestId)
+        // The number in a forged frame is ignored: the authoritative
+        // fetch decides what is dialled.
+        assertEquals("2030-01-01T00:00:00Z", event.expiresAt)
+
+        assertNull(DialSocketProtocol.parse("""{"type":"ready"}"""))
+        assertNull(DialSocketProtocol.parse("""{"type":"dial_request","request_id":"not-a-uuid"}"""))
+        assertNull(DialSocketProtocol.parse("not json"))
+        assertNull(DialSocketProtocol.parse(""))
+        assertNull(DialSocketProtocol.parse("x".repeat(5000)))
     }
+
+    @Test
+    fun `reconnects on transient closes but not on takeover or deliberate stop`() {
+        assertTrue(DialSocketProtocol.shouldReconnect(1006))
+        assertTrue(DialSocketProtocol.shouldReconnect(4401))
+        assertFalse(DialSocketProtocol.shouldReconnect(1000))
+        // Another device (4001) or a newer socket for this device
+        // (4002) owns delivery now; reconnecting would fight it.
+        assertFalse(DialSocketProtocol.shouldReconnect(4001))
+        assertFalse(DialSocketProtocol.shouldReconnect(4002))
+        // 1012 = revocation registry unreadable (server suspends
+        // the socket). Retryable by design: reconnect and
+        // revalidate, never wipe — a database outage is not a
+        // logout.
+        assertTrue(DialSocketProtocol.shouldReconnect(1012))
+    }
+
+    @Test
+    fun `reconnect backoff grows and caps at one minute`() {
+        assertEquals(1_000L, DialSocketProtocol.reconnectDelayMs(0))
+        assertEquals(4_000L, DialSocketProtocol.reconnectDelayMs(2))
+        assertEquals(60_000L, DialSocketProtocol.reconnectDelayMs(20))
+        // Jitter never pushes the delay past the one-minute cap.
+        assertEquals(60_000L, DialSocketProtocol.reconnectDelayMs(20, jitterMs = 500))
+    }
+
+    // --- Existing safeguards ---------------------------------------
 
     @Test
     fun `notification post fails closed when Android services are unavailable`() {
         // No NotificationManager service: show() must return false
-        // (→ no delivered ack) rather than throw, so the poller holds
-        // the request instead of marking an unseen row delivered.
+        // (→ no delivered ack) rather than throw, so the request is
+        // not marked delivered when nothing was shown.
         val context = mockk<Context>()
         every {
             context.getSystemService(NotificationManager::class.java)

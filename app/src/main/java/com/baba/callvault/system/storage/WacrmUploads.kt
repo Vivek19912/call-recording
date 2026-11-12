@@ -57,8 +57,11 @@ object WacrmUploads {
     internal const val WORK_NAME_PREFIX = "wacrm-upload-"
 
     /**
-     * Queues a WACRM upload for a finalized recording — or skips quietly when uploads are disabled,
+     * Queues a WACRM upload for a finalized recording — or skips quietly when not signed in,
      * unconfigured, already done, or the file is over the server limit. Best-effort: never throws.
+     *
+     * Uploads are enabled by a signed-in account alone: the old upload switch is gone, so no
+     * stored boolean is consulted here — only the live session below (plus the server URL).
      *
      * @param sizeBytes best-known size (staged count or document length); re-verified in the worker.
      * @param lastModified best-known epoch millis; `recorded_at` prefers the filename timestamp and
@@ -86,7 +89,7 @@ object WacrmUploads {
         val app = context.applicationContext
         // Plain-preference reads are memory-cached: safe on the caller thread, even the service main
         // thread. Everything that can touch disk (encrypted store, Room, WorkManager) goes to IO.
-        if (!AppPreferences(app).isWacrmEnabled()) return
+        // No upload-enabled boolean: a signed-in account alone enables uploads (checked below).
         CoroutineScope(Dispatchers.IO).launch {
             runCatching { enqueueResolved(app, uri, displayName, mimeType, sizeBytes, lastModified, phoneNumber, direction, callType) }
                 .onFailure { AppLogger.w(TAG, "Could not queue a WACRM upload for '$displayName': ${it.message}") }
@@ -105,15 +108,15 @@ object WacrmUploads {
         callType: CallType?,
     ) {
         val prefs = AppPreferences(context)
-        if (!prefs.isWacrmEnabled()) return
+        // No upload-enabled boolean: the signed-in session below is the only gate, so an old
+        // stored `false` can never block uploads while a valid session exists.
         if (WacrmApi.normalizeBaseUrl(prefs.getWacrmUrl()) == null) {
             AppLogger.w(TAG, "WACRM upload skipped for '$displayName': server URL is missing or not HTTPS")
             return
         }
-        // Session presence is checked here (not just in the worker) so a disconnected phone
-        // does not queue work that can only fail — and so connecting later starts uploads fresh
-        // instead of finding rows already stamped FAILED. The legacy API key is deliberately
-        // ignored: uploads require an explicit WhatsApp Max login, never a stored key.
+        // Session presence is what enables uploads: a signed-in account uploads automatically,
+        // and a signed-out (or never signed-in) one queues nothing. Connecting later starts
+        // uploads fresh instead of finding rows already stamped FAILED.
         if (!WacrmSession.isConnected(context)) {
             AppLogger.i(TAG, "WACRM upload skipped for '$displayName': WhatsApp Max is not connected")
             return
@@ -150,6 +153,7 @@ object WacrmUploads {
             .setInputData(data)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
+            .addTag(WacrmRemoteLogout.WACRM_WORK_TAG)
             .build()
         // KEEP: a worker already queued or retrying for this recording wins; a second finalize-time
         // enqueue for the same name cannot start a parallel upload.

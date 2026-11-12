@@ -22,9 +22,6 @@ import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Article
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
@@ -46,7 +43,6 @@ import com.baba.callvault.ui.common.CvCard
 import com.baba.callvault.ui.common.CvScaffold
 import com.baba.callvault.ui.common.CvSectionHeader
 import com.baba.callvault.ui.navigation.HomeSection
-import com.baba.callvault.ui.theme.LocalCvBrand
 
 /**
  * The hub: what the app opens on, and what back from a section returns to.
@@ -66,20 +62,13 @@ import com.baba.callvault.ui.theme.LocalCvBrand
 @Composable
 fun HubScreen(
     recordingsCount: Int,
-    transcriptsCount: Int,
-    summariesCount: Int,
     listState: LazyGridState,
     onOpenSection: (HomeSection) -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenCommunity: () -> Unit,
-    onTuckCommunity: () -> Unit,
-    communityTucked: Boolean,
     modifier: Modifier = Modifier,
     titleTrailing: (@Composable () -> Unit)? = null,
     statusCards: @Composable () -> Unit,
 ) {
-    val brand = LocalCvBrand.current
-
     CvScaffold(
         modifier = modifier.fillMaxSize(),
         title = stringResource(R.string.app_name),
@@ -113,7 +102,7 @@ fun HubScreen(
                 CvSectionHeader(text = stringResource(R.string.home_hub_library_title))
             }
 
-            item {
+            item(span = { GridItemSpan(HUB_COLUMNS) }) {
                 HubCard(
                     icon = Icons.Filled.GraphicEq,
                     accent = MaterialTheme.colorScheme.primary,
@@ -122,42 +111,6 @@ fun HubScreen(
                     body = stringResource(R.string.home_hub_recordings_body),
                     onClick = { onOpenSection(HomeSection.Recordings) },
                 )
-            }
-            item {
-                HubCard(
-                    icon = Icons.AutoMirrored.Filled.Article,
-                    accent = brand.info,
-                    count = stringResource(R.string.home_transcripts_count, transcriptsCount),
-                    title = stringResource(R.string.home_transcripts_title),
-                    body = stringResource(R.string.home_hub_transcripts_body),
-                    onClick = { onOpenSection(HomeSection.Transcripts) },
-                )
-            }
-            item {
-                HubCard(
-                    icon = Icons.Filled.AutoAwesome,
-                    accent = brand.success,
-                    count = stringResource(R.string.home_summaries_count, summariesCount),
-                    title = stringResource(R.string.home_summaries_title),
-                    body = stringResource(R.string.home_hub_summaries_body),
-                    onClick = { onOpenSection(HomeSection.Summaries) },
-                )
-            }
-            // Last, and only while the user has not tucked it away: an invitation is worth one cell of a
-            // screen they open every day, and worth none at all once they have taken it up. Long-press
-            // moves it to the pill beside Support rather than hiding it, so it is still one tap away.
-            if (!communityTucked) {
-                item {
-                    HubCard(
-                        icon = Icons.AutoMirrored.Filled.Send,
-                        accent = brand.accent,
-                        count = stringResource(R.string.home_hub_community_eyebrow),
-                        title = stringResource(R.string.home_hub_community_title),
-                        body = stringResource(R.string.home_hub_community_body),
-                        onClick = onOpenCommunity,
-                        onLongClick = onTuckCommunity,
-                    )
-                }
             }
         }
     }

@@ -49,7 +49,7 @@ class ReportBundleTest {
     fun the_suggested_file_name_says_what_it_is_and_when() {
         // 2026-09-11 14:30:05 local time, expressed as fields rather than a clock the test would have to fake.
         assertEquals(
-            "callvault_report_2026-09-11_14-30.txt",
+            "call-recorder-report_2026-09-11_14-30.txt",
             ReportBundle.suggestedFileName(year = 2026, month = 9, day = 11, hour = 14, minute = 30),
         )
     }

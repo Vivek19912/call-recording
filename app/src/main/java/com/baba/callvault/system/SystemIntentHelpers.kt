@@ -234,7 +234,7 @@ fun Context.shareLogFile(file: File) = shareLogFiles(listOf(file))
 fun Context.shareLogFiles(files: List<File>) {
     if (files.isEmpty()) return
     val uris = ArrayList(files.map { FileProvider.getUriForFile(this, "$packageName.fileprovider", it) })
-    val subject = "CallVault debug logs"
+    val subject = "Call Recorder debug logs"
 
     val sendIntent = if (uris.size == 1) {
         Intent(Intent.ACTION_SEND).apply {

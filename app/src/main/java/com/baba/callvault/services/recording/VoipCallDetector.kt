@@ -220,19 +220,12 @@ class VoipCallDetector(private val context: Context) {
             callActive = true
             AppLogger.i(TAG, "VoIP call detected (mode=IN_COMMUNICATION)")
 
-            // "Ask me": arm, but let the user decide. The detector still runs — it has to, or there
-            // would be nothing to prompt about — and only the automatic start is withheld.
-            val prefs = AppPreferences(context)
-            val action = RecordingPolicy.forVoipCall(
-                voipEnabled = prefs.isVoipRecordingEnabled(),
-                autoStart = prefs.isVoipAutoStartEnabled(),
-            )
-            if (action == RecordingPolicy.VoipAction.OFFER) {
-                AppLogger.i(TAG, "App-call auto-start is off — offering to record instead")
-                VoipRecordPrompt.show(context, VoipRecordingCoordinator.currentCallAppLabel(context))
-                onRecordingStateChanged?.invoke()
-                return
-            }
+            // Owner-controlled path: every detected app call is offered to the
+            // coordinator, which enforces the Owner's WhatsApp selection (or the
+            // preserved local behavior for non-WhatsApp apps). No local
+            // OFFER/prompt standby: local switches can never suppress an
+            // Owner-authorized application.
+            VoipRecordPrompt.cancel(context)
             runCatching { VoipRecordingCoordinator.onCallStarted(context) }
                 .onFailure { AppLogger.w(TAG, "VoIP start failed: ${it.message}") }
             isRecording = VoipRecordingCoordinator.isRecording
@@ -240,10 +233,11 @@ class VoipCallDetector(private val context: Context) {
         }
     }
 
-    /** Starts watching, if the feature is on. Idempotent. */
+    /** Starts watching when recording may be needed. Idempotent. */
     fun start() {
         if (registered || audioManager == null) return
-        if (!AppPreferences(context).isVoipRecordingEnabled()) return
+        val prefs = AppPreferences(context)
+        if (!prefs.isVoipRecordingEnabled() && !VoipCaptureController.isOwnerWhatsappSelected(context)) return
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 audioManager.addOnModeChangedListener(executor, modeListener)
@@ -272,9 +266,10 @@ class VoipCallDetector(private val context: Context) {
         AppLogger.i(TAG, "VoIP call detection stopped")
     }
 
-    /** Re-reads the preference: starts watching when switched on, stops when switched off. */
+    /** Re-reads the policy: starts watching when needed, stops when neither path needs it. */
     fun sync() {
-        if (AppPreferences(context).isVoipRecordingEnabled()) start() else stop()
+        val prefs = AppPreferences(context)
+        if (prefs.isVoipRecordingEnabled() || VoipCaptureController.isOwnerWhatsappSelected(context)) start() else stop()
     }
 
     private companion object {

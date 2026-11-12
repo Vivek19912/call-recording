@@ -8,9 +8,8 @@
 
 package com.baba.callvault.ui.screens
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -24,13 +23,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -44,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.LinkAnnotation
@@ -114,26 +111,18 @@ fun DisclaimerScreen(onContinue: () -> Unit, modifier: Modifier = Modifier) {
                 .padding(top = 28.dp, bottom = 20.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
-            // Branded hero: teal app glyph + welcome title + one-line subtitle.
+            // Branded hero: approved logo + welcome title.
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
+                Image(
+                    painter = painterResource(R.drawable.ic_app_logo),
+                    contentDescription = null,
                     modifier = Modifier
                         .size(52.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.GraphicEq,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
+                        .clip(RoundedCornerShape(14.dp))
+                )
                 Spacer(Modifier.width(16.dp))
                 CvHero(
                     title = stringResource(R.string.disclaimer_title),
-                    subtitle = stringResource(R.string.disclaimer_ui_hero_subtitle),
                     modifier = Modifier.weight(1f)
                 )
             }

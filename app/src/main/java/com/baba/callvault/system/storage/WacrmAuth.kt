@@ -165,6 +165,39 @@ object WacrmAuth {
         return runCatching { JSONObject(body).has("phoneRecordingNumber") }.getOrDefault(false)
     }
 
+    /**
+     * Parses the Owner's explicit phone-recording opt-in out of
+     * `GET /api/auth/me` (`phoneRecordingEnabled`). Null when absent
+     * (older server) or not a boolean — callers must keep the
+     * last-known value rather than inventing one.
+     */
+    fun parsePhoneRecordingEnabled(body: String): Boolean? {
+        return runCatching {
+            val json = JSONObject(body)
+            if (!json.has("phoneRecordingEnabled") || json.isNull("phoneRecordingEnabled")) return null
+            (json.opt("phoneRecordingEnabled") as? Boolean)
+        }.getOrNull()
+    }
+
+    /** True when `/api/auth/me` carries the Owner's explicit phone opt-in. */
+    fun hasPhoneRecordingEnabled(body: String): Boolean {
+        return runCatching { JSONObject(body).has("phoneRecordingEnabled") }.getOrDefault(false)
+    }
+
+    /**
+     * Whether the Owner has ever saved recording settings for this user
+     * (`phoneRecordingConfigured` in `/api/auth/me`). Distinguishes an
+     * explicit "disabled" from "never configured" in the read-only UI.
+     * Null when absent (older server) — callers keep the last-known value.
+     */
+    fun parsePhoneRecordingConfigured(body: String): Boolean? {
+        return runCatching {
+            val json = JSONObject(body)
+            if (!json.has("phoneRecordingConfigured") || json.isNull("phoneRecordingConfigured")) return null
+            (json.opt("phoneRecordingConfigured") as? Boolean)
+        }.getOrNull()
+    }
+
     /** Canonical digits for a server phone number; null when not a plausible E.164 number. */
     fun normalizeServerPhoneNumber(raw: String?): String? {
         if (raw.isNullOrBlank()) return null
@@ -205,6 +238,7 @@ object WacrmAuth {
         url: String,
         bearer: String?,
         openConnection: (String) -> HttpURLConnection,
+        extraHeaders: Map<String, String> = emptyMap(),
     ): Pair<Int, String> {
         val connection = openConnection(url)
         connection.requestMethod = "GET"
@@ -213,6 +247,7 @@ object WacrmAuth {
         connection.readTimeout = READ_TIMEOUT_MS
         connection.setRequestProperty("Accept", "application/json")
         if (bearer != null) connection.setRequestProperty("Authorization", "Bearer $bearer")
+        for ((name, value) in extraHeaders) connection.setRequestProperty(name, value)
         val status = connection.responseCode
         val text = runCatching {
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
@@ -343,7 +378,17 @@ object WacrmAuth {
         }
     }
 
-    /** Best-effort server-side session revocation for Disconnect. Never throws. */
+    /** Best-effort server-side session revocation for Disconnect. Never throws.
+     *  Uses GoTrue's `?scope=local` so ONLY this device's session is revoked:
+     *  the server default is global and would sign out every phone and
+     *  browser on the account.
+     *
+     *  NO PRODUCTION CALLERS — intentional. Sign-out is server-driven
+     *  now (see [WacrmRemoteLogout]): the agent offers no Disconnect,
+     *  and a remote wipe must NOT call this (the session is already
+     *  revoked server-side). Kept for potential future device-local
+     *  use; any new caller must keep `scope=local` (covered by
+     *  WacrmAuthTest `disconnect revokes only this device session`). */
     fun signOut(
         config: MobileConfig,
         accessToken: String,
@@ -354,7 +399,7 @@ object WacrmAuth {
     ) {
         runCatching {
             postJson(
-                "${config.supabaseUrl}/auth/v1/logout",
+                "${config.supabaseUrl}/auth/v1/logout?scope=local",
                 config.supabaseAnonKey,
                 JSONObject(),
                 bearer = accessToken,
@@ -367,13 +412,20 @@ object WacrmAuth {
     fun fetchMe(
         baseUrl: String,
         accessToken: String,
+        /** Stable per-install id for server-driven sign-out; header only, never logged. */
+        deviceId: String? = null,
         openConnection: (String) -> HttpURLConnection = { url ->
             @Suppress("UsePropertyAccessSyntax")
             (URI(url).toURL().openConnection() as HttpURLConnection)
         },
     ): MeInfo? {
         return try {
-            val (status, body) = getJson("$baseUrl/api/auth/me", accessToken, openConnection)
+            val headers = if (deviceId != null) {
+                WacrmDeviceAuth.deviceHeaders(deviceId)
+            } else {
+                emptyMap()
+            }
+            val (status, body) = getJson("$baseUrl/api/auth/me", accessToken, openConnection, headers)
             if (status !in 200..299) {
                 logStageFailure("me", status)
                 null

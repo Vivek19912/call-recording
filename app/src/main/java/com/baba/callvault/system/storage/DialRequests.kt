@@ -5,30 +5,29 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.time.Instant
 import com.baba.callvault.utils.AppLogger
-import org.json.JSONArray
 import org.json.JSONObject
 
 /**
  * Click-to-dial handoff client.
  *
- * Delivery model: authenticated foreground sync — CallVault polls
- * `GET {base}/api/v1/dial-requests` with the authenticated
- * WhatsApp Max user token (same bearer discipline as
+ * Delivery model: one authenticated WebSocket (see [DialSocketClient]).
+ * The socket carries a request id only; this object performs the
+ * authoritative one-shot read of `GET {base}/api/v1/dial-requests/{id}`
+ * with the WhatsApp Max user token (same bearer discipline as
  * [WacrmApi]: header only, HTTPS only, never logged). The server
  * returns only requests created by the logged-in user
  * (`requested_by`), so one employee's phone never sees another's.
- * Each authorized request becomes a high-priority notification;
- * the user taps to open Android's native dialer via ACTION_DIAL.
+ *
+ * There is no list polling anywhere in this path: [fetchOne] is
+ * called once per socket signal, never in a loop.
  *
  * Never uses ACTION_CALL, never places calls silently or from the
  * background. Recording / upload / call-event behavior is untouched:
  * a dial request is not proof of a call, and this client never
  * creates one.
  *
- * Failure contract: every failure is a typed [FetchResult], never
- * a silent empty list, so the poller can tell "no requests"
- * (Success) apart from "could not ask" (Auth/Network/...) and log
- * each one.
+ * Failure contract: every failure is a typed [FetchOneResult], never
+ * a silent empty result.
  */
 object DialRequests {
 
@@ -45,35 +44,45 @@ object DialRequests {
         val createdAt: String,
     )
 
-    /** Typed poll outcome — never a silent empty list. */
-    sealed interface FetchResult {
-        data class Success(val requests: List<DialRequest>) : FetchResult
-        data class HttpFailure(val statusCode: Int) : FetchResult
-        data object NetworkError : FetchResult
-        data object ParseError : FetchResult
+    /** One-shot authoritative read for a WebSocket signal. */
+    sealed interface FetchOneResult {
+        data class Success(val request: DialRequest) : FetchOneResult
+        data class HttpFailure(val statusCode: Int) : FetchOneResult
+        data object NetworkError : FetchOneResult
+        data object ParseError : FetchOneResult
     }
 
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val READ_TIMEOUT_MS = 30_000
 
-    fun fetchPending(
+    /**
+     * One-shot read of the authoritative row behind a WebSocket
+     * signal. Never called in a loop: the socket delivers the id,
+     * this proves the request is still live and supplies the
+     * server-owned number.
+     */
+    fun fetchOne(
         baseUrl: String,
         bearerCredential: String,
+        id: String,
+        /** Stable per-install id for server-driven sign-out; header only, never logged. */
+        deviceId: String? = null,
         openConnection: (String) -> HttpURLConnection = {
             (URI(it).toURL().openConnection() as HttpURLConnection)
         },
-    ): FetchResult {
+    ): FetchOneResult {
         val connection = try {
-            openConnection("$baseUrl/api/v1/dial-requests?status=pending&limit=10")
+            openConnection("$baseUrl/api/v1/dial-requests/$id")
         } catch (e: Exception) {
-            AppLogger.w(TAG, "Dial poll: could not open connection (${e.javaClass.simpleName})")
-            return FetchResult.NetworkError
+            AppLogger.w(TAG, "Dial read: could not open connection (${e.javaClass.simpleName})")
+            return FetchOneResult.NetworkError
         }
         return try {
             connection.requestMethod = "GET"
             connection.connectTimeout = CONNECT_TIMEOUT_MS
             connection.readTimeout = READ_TIMEOUT_MS
             connection.setRequestProperty("Authorization", "Bearer $bearerCredential")
+            if (deviceId != null) connection.setRequestProperty(WacrmDeviceAuth.DEVICE_ID_HEADER, deviceId)
             connection.setRequestProperty("Accept", "application/json")
             val status = connection.responseCode
             val body = runCatching {
@@ -82,76 +91,63 @@ object DialRequests {
             }.getOrDefault("")
             connection.disconnect()
             when {
-                status in 200..299 -> runCatching { parseList(body) }
+                status in 200..299 -> runCatching { parseOne(body) }
                     .onFailure {
-                        AppLogger.w(TAG, "Dial poll: HTTP $status with unparseable body (${it.javaClass.simpleName})")
+                        AppLogger.w(TAG, "Dial read: HTTP $status with unparseable body (${it.javaClass.simpleName})")
                     }
                     .fold(
-                        onSuccess = { FetchResult.Success(it) },
-                        onFailure = { FetchResult.ParseError },
+                        onSuccess = { row ->
+                            if (row == null) FetchOneResult.ParseError
+                            else FetchOneResult.Success(row)
+                        },
+                        onFailure = { FetchOneResult.ParseError },
                     )
-                status == 401 || status == 403 -> {
-                    AppLogger.w(TAG, "Dial poll: HTTP $status (session rejected)")
-                    FetchResult.HttpFailure(status)
-                }
-                status in 500..599 -> {
-                    AppLogger.w(TAG, "Dial poll: HTTP $status (server)")
-                    FetchResult.HttpFailure(status)
-                }
                 else -> {
-                    AppLogger.w(TAG, "Dial poll: HTTP $status")
-                    FetchResult.HttpFailure(status)
+                    AppLogger.w(TAG, "Dial read ${maskId(id)}: HTTP $status")
+                    FetchOneResult.HttpFailure(status)
                 }
             }
         } catch (e: IOException) {
-            AppLogger.w(TAG, "Dial poll: network failure (${e.javaClass.simpleName})")
+            AppLogger.w(TAG, "Dial read: network failure (${e.javaClass.simpleName})")
             runCatching { connection.disconnect() }
-            FetchResult.NetworkError
+            FetchOneResult.NetworkError
         } catch (e: Exception) {
-            AppLogger.w(TAG, "Dial poll: error (${e.javaClass.simpleName})")
+            AppLogger.w(TAG, "Dial read: error (${e.javaClass.simpleName})")
             runCatching { connection.disconnect() }
-            FetchResult.NetworkError
+            FetchOneResult.NetworkError
         }
     }
 
     /**
-     * Parses the exact `GET /api/v1/dial-requests` envelope:
-     * `{ "data": { "dial_requests": [ {id, phone_number,
-     * contact_id, flow_id, run_id, status, expires_at, created_at,
-     * ...unknowns tolerated} ] } }`. Unknown fields are ignored so
-     * additive server changes never break the device. Throws on a
-     * structurally unusable body (caller maps to ParseError).
-     * Rows with unusable ids/numbers are skipped, never sent to
-     * the dialer.
+     * Parses `{ "data": { "dial_request": {…} } }`. Null when the
+     * envelope is unusable, the id/number is missing, or the number
+     * is not dialable — such a row must never reach the dialer.
      */
-    fun parseList(body: String): List<DialRequest> {
-        if (body.isBlank()) return emptyList()
+    fun parseOne(body: String): DialRequest? {
+        if (body.isBlank()) return null
         val root = JSONObject(body)
-        val data = root.optJSONObject("data") ?: return emptyList()
-        val arr: JSONArray = data.optJSONArray("dial_requests") ?: return emptyList()
-        val out = ArrayList<DialRequest>(arr.length())
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val id = o.optString("id").takeIf { it.isNotBlank() } ?: continue
-            val phone = o.optString("phone_number").takeIf { it.isNotBlank() } ?: continue
-            // Device-side validation: malformed numbers never reach
-            // the dialer even if the server ever let one through.
-            if (!DialPhoneValidation.isDialable(phone)) {
-                AppLogger.w(TAG, "Dial poll: skipping row ${maskId(id)} (undialable number)")
-                continue
-            }
-            out += DialRequest(
-                id = id,
-                phoneNumber = DialPhoneValidation.normalize(phone),
-                contactId = o.optString("contact_id").takeIf { it.isNotBlank() },
-                flowId = o.optString("flow_id").takeIf { it.isNotBlank() },
-                runId = o.optString("run_id").takeIf { it.isNotBlank() },
-                status = o.optString("status").ifBlank { "pending" },
-                expiresAt = o.optString("expires_at"),
-                createdAt = o.optString("created_at"),
-            )
+        val data = root.optJSONObject("data") ?: return null
+        val obj = data.optJSONObject("dial_request") ?: return null
+        return parseRow(obj)
+    }
+
+    private fun parseRow(o: JSONObject): DialRequest? {
+        val id = o.optString("id").takeIf { it.isNotBlank() } ?: return null
+        val phone = o.optString("phone_number").takeIf { it.isNotBlank() } ?: return null
+        if (!DialPhoneValidation.isDialable(phone)) {
+            AppLogger.w(TAG, "Dial read: skipping row ${maskId(id)} (undialable number)")
+            return null
         }
-        return out
+        return DialRequest(
+            id = id,
+            phoneNumber = DialPhoneValidation.normalize(phone),
+            contactId = o.optString("contact_id").takeIf { it.isNotBlank() },
+            flowId = o.optString("flow_id").takeIf { it.isNotBlank() },
+            runId = o.optString("run_id").takeIf { it.isNotBlank() },
+            status = o.optString("status").ifBlank { "pending" },
+            expiresAt = o.optString("expires_at"),
+            createdAt = o.optString("created_at"),
+        )
     }
 
     /**
@@ -170,6 +166,8 @@ object DialRequests {
         bearerCredential: String,
         id: String,
         status: String,
+        /** Stable per-install id for server-driven sign-out; header only, never logged. */
+        deviceId: String? = null,
         openConnection: (String) -> HttpURLConnection = {
             (URI(it).toURL().openConnection() as HttpURLConnection)
         },
@@ -186,6 +184,7 @@ object DialRequests {
             connection.connectTimeout = CONNECT_TIMEOUT_MS
             connection.readTimeout = READ_TIMEOUT_MS
             connection.setRequestProperty("Authorization", "Bearer $bearerCredential")
+            if (deviceId != null) connection.setRequestProperty(WacrmDeviceAuth.DEVICE_ID_HEADER, deviceId)
             connection.setRequestProperty("Content-Type", "application/json")
             connection.setRequestProperty("Accept", "application/json")
             val payload = JSONObject().put("status", status).toString().toByteArray(Charsets.UTF_8)

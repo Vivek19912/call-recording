@@ -337,6 +337,21 @@
                 android:value="Call recording: keep the privileged recorder daemon warm so calls are captured instantly." />
         </service>
 
+        <!-- Persistent authenticated WebSocket for desktop click-to-dial.
+             A foreground service keeps the socket alive when the UI is closed.
+             stopWithTask=false: swiping the task away must not drop delivery.
+             The FGS type is specialUse because this is an always-on
+             connectivity anchor, not a data transfer or media job. -->
+        <service
+            android:name=".system.storage.DialSocketService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Click-to-dial: keep an authenticated connection so a desktop request can open the native dialer." />
+        </service>
+
         <!--
             WorkManager's own foreground service, given a type so transcription and summarisation can
             promote themselves out of cached-process priority.

@@ -54,6 +54,9 @@ import java.time.Instant
  */
 class WacrmUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
 
+    /** Outcome bucket for one recording POST status. Pure — unit tested. */
+    enum class PostDisposition { SUCCESS, AUTH, TERMINAL, RETRY }
+
     override suspend fun doWork(): Result {
         val name = inputData.getString(KEY_NAME) ?: return Result.failure()
         val uri = inputData.getString(KEY_URI)?.toUri() ?: return Result.failure()
@@ -69,10 +72,8 @@ class WacrmUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
         }
 
         val prefs = AppPreferences(applicationContext)
-        if (!prefs.isWacrmEnabled()) {
-            AppLogger.i(TAG, "WACRM upload disabled; not uploading '$name'")
-            return Result.failure()
-        }
+        // No upload-enabled boolean: the signed-in session below is the only gate, so an old
+        // stored `false` can never block uploads while a valid session exists.
         val baseUrl = WacrmApi.normalizeBaseUrl(prefs.getWacrmUrl())
         if (baseUrl == null) {
             AppLogger.w(TAG, "WACRM upload of '$name' failed: server URL is missing or not HTTPS")
@@ -81,15 +82,25 @@ class WacrmUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
         // Authenticated user session (Phase 2). The legacy API key is deliberately never
         // consulted here: uploads require an explicit Connect, and a stored key must not cause
         // silent uploads. Never logged (see LogRedaction).
-        val storedSession = WacrmSession.get(applicationContext)
-        if (storedSession == null) {
-            notifyReconnect(name)
-            return terminal(name, "WhatsApp Max needs to be connected")
+        val storedSession = when (val read = WacrmSession.read(applicationContext)) {
+            is WacrmSession.SessionRead.Available -> read.session
+            is WacrmSession.SessionRead.Unavailable -> {
+                // The encrypted store itself is unreadable — transient. Retry
+                // without touching the row (never mark FAILED for storage).
+                return Result.retry()
+            }
+            is WacrmSession.SessionRead.SignedOut -> {
+                notifyReconnect(name)
+                return terminal(name, "WhatsApp Max needs to be connected")
+            }
         }
         var accessToken = storedSession.accessToken
         if (WacrmAuth.shouldRefresh(storedSession.expiresAtMs, System.currentTimeMillis())) {
             val renewed = refreshSession(baseUrl)
             if (renewed == null) {
+                if (WacrmSession.read(applicationContext) is WacrmSession.SessionRead.Unavailable) {
+                    return Result.retry()
+                }
                 notifyReconnect(name)
                 return terminal(name, "the WhatsApp Max session expired")
             }
@@ -141,7 +152,7 @@ class WacrmUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
                 return@postOnce null
             } ?: return null
             return try {
-                audio.use { WacrmApi.postRecording(baseUrl, token, audio, name, uploadMime, fields) }
+                audio.use { WacrmApi.postRecording(baseUrl, token, audio, name, uploadMime, fields, deviceId = DialDeviceId.get(applicationContext)) }
             } catch (e: Exception) {
                 AppLogger.w(TAG, "WACRM upload of '$name' errored (${e.message}); retrying while the budget lasts")
                 null
@@ -166,29 +177,32 @@ class WacrmUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
             status = if (renewed != null) {
                 postOnce(renewed.accessToken) ?: return retryOrGiveUp(name)
             } else {
+                if (WacrmSession.read(applicationContext) is WacrmSession.SessionRead.Unavailable) {
+                    return Result.retry()
+                }
                 notifyReconnect(name)
                 return terminal(name, "the WhatsApp Max session expired")
             }
         }
 
-        return when {
-            status.statusCode == 201 -> {
+        return when (classifyPostStatus(status.statusCode)) {
+            PostDisposition.SUCCESS -> {
                 AppLogger.i(TAG, "WACRM upload of '$name' succeeded (${sizeBytes} bytes)")
                 RecordingCatalog.setWacrmState(applicationContext, name, WacrmUploadState.UPLOADED)
                 Result.success()
             }
-            status.statusCode == 401 -> {
+            PostDisposition.AUTH -> {
                 // Still unauthorized after a fresh token: the account lost permission (or the
                 // user was removed). Retrying cannot help; tell the user to reconnect.
                 notifyReconnect(name)
                 terminal(name, "the server rejected the session (HTTP 401)")
             }
-            status.statusCode in 400..499 -> {
+            PostDisposition.TERMINAL -> {
                 // Malformed request, rejected MIME, oversize, no permission: retrying cannot help.
                 AppLogger.w(TAG, "WACRM upload of '$name' rejected (HTTP ${status.statusCode}): ${status.bodyExcerpt}")
                 terminal(name, "the server rejected the upload (HTTP ${status.statusCode})")
             }
-            else -> {
+            PostDisposition.RETRY -> {
                 // 5xx and anything unexpected: transient-shaped until the budget runs out.
                 AppLogger.w(TAG, "WACRM upload of '$name' failed (HTTP ${status.statusCode}): ${status.bodyExcerpt}; retrying while the budget lasts")
                 retryOrGiveUp(name)
@@ -197,37 +211,37 @@ class WacrmUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
     }
 
     /**
-     * Rotates the stored session's tokens via the refresh token. Returns the renewed session, or
-     * null when refresh is impossible (no session, no config, rejected refresh token). Identity
-     * fields (user/account) are preserved from storage — refresh responses carry no new identity.
+     * Rotates the stored session via the shared single-flight refresh.
+     * Returns the renewed session, or null when refresh is impossible
+     * (no session, no config, rejected refresh token, unreadable store).
+     * Callers distinguish transient store failure ([WacrmSession.read]
+     * → Unavailable → retry) from terminal auth failure themselves.
      * A successful refresh also re-pulls the user's WhatsApp recording source (connectivity is
      * back, so apply the newest server value; failures keep the last known source).
      */
     private fun refreshSession(baseUrl: String): WacrmSession.Session? {
-        val current = WacrmSession.get(applicationContext) ?: return null
         val config = WacrmAuth.fetchMobileConfig(baseUrl) ?: return null
-        return when (val outcome = WacrmAuth.refresh(config, current.refreshToken)) {
-            is WacrmAuth.AuthOutcome.Ok -> {
-                WacrmSession.save(
-                    applicationContext,
-                    outcome.session.accessToken,
-                    outcome.session.refreshToken,
-                    outcome.session.expiresAtMs,
-                    current.userId,
-                    current.userEmail,
-                    current.userName,
-                    current.accountId,
-                    current.accountName,
-                    current.role,
-                )
+        return when (
+            val outcome = WacrmSessionRefresh.refreshIfNeeded(applicationContext, config, force = true)
+        ) {
+            is WacrmSessionRefresh.SessionResult.Valid -> {
                 WhatsappSourceSync.syncAfterAuth(
                     applicationContext,
                     baseUrl,
-                    outcome.session.accessToken
+                    outcome.session.accessToken,
+                    deviceId = DialDeviceId.get(applicationContext)
                 )
-                WacrmSession.get(applicationContext)
+                outcome.session
             }
-            else -> null
+            else -> {
+                // Refresh failed: the session may have been revoked
+                // server-side. Uses the CURRENT access token only;
+                // wipes solely on an explicit revoked answer.
+                WacrmSession.get(applicationContext)?.accessToken?.let { token ->
+                    WacrmDeviceAuth.checkStatusAndWipeIfRevoked(applicationContext, baseUrl, token)
+                }
+                null
+            }
         }
     }
 
@@ -280,6 +294,22 @@ class WacrmUploadWorker(ctx: Context, params: WorkerParameters) : CoroutineWorke
         /** Direction values the server accepts. Anything else is dropped, never sent. */
         const val DIRECTION_IN = "in"
         const val DIRECTION_OUT = "out"
+
+        /**
+         * Buckets a recording POST status for the final `when` in
+         * [doWork]: 201 → success; 401 → terminal auth (after the one
+         * refresh + repost above); any other 4xx → terminal; 5xx
+         * (including 503 registry outage) and anything unexpected →
+         * transient retry, never terminal FAILED due to auth and never
+         * a wipe. Recordings stay untouched regardless. Pure — unit
+         * tested.
+         */
+        fun classifyPostStatus(statusCode: Int): PostDisposition = when {
+            statusCode == 201 -> PostDisposition.SUCCESS
+            statusCode == 401 -> PostDisposition.AUTH
+            statusCode in 400..499 -> PostDisposition.TERMINAL
+            else -> PostDisposition.RETRY
+        }
 
         /**
          * The multipart text fields for one upload. Pure — unit tested. Absent values are

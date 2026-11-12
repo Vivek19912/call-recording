@@ -50,6 +50,9 @@ import com.baba.callvault.utils.AppLogger
  */
 class CallEventWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
 
+    /** Outcome bucket for one event POST status. Pure — unit tested. */
+    enum class PostDisposition { SUCCESS, AUTH, TERMINAL, RETRY }
+
     override suspend fun doWork(): Result {
         val eventId = inputData.getString(KEY_EVENT_ID) ?: return Result.failure()
         val dao = RecordingDatabase.get(applicationContext).callEventDao()
@@ -69,15 +72,25 @@ class CallEventWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             AppLogger.w(TAG, "Call event post failed: server URL is missing or not HTTPS")
             return Result.failure()
         }
-        val storedSession = WacrmSession.get(applicationContext)
-        if (storedSession == null) {
-            notifyReconnect()
-            return terminal(eventId, "WhatsApp Max needs to be connected")
+        val storedSession = when (val read = WacrmSession.read(applicationContext)) {
+            is WacrmSession.SessionRead.Available -> read.session
+            is WacrmSession.SessionRead.Unavailable -> {
+                // The encrypted store itself is unreadable — transient. Retry
+                // without touching the row (never mark FAILED for storage).
+                return Result.retry()
+            }
+            is WacrmSession.SessionRead.SignedOut -> {
+                notifyReconnect()
+                return terminal(eventId, "WhatsApp Max needs to be connected")
+            }
         }
         var accessToken = storedSession.accessToken
         if (WacrmAuth.shouldRefresh(storedSession.expiresAtMs, System.currentTimeMillis())) {
             val renewed = refreshSession(baseUrl)
             if (renewed == null) {
+                if (WacrmSession.read(applicationContext) is WacrmSession.SessionRead.Unavailable) {
+                    return Result.retry()
+                }
                 notifyReconnect()
                 return terminal(eventId, "the WhatsApp Max session expired")
             }
@@ -99,7 +112,7 @@ class CallEventWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
 
         fun postOnce(token: String): WacrmApi.UploadResult? {
             return try {
-                WacrmApi.postCallEvent(baseUrl, token, fields)
+                WacrmApi.postCallEvent(baseUrl, token, fields, deviceId = DialDeviceId.get(applicationContext))
             } catch (e: Exception) {
                 AppLogger.w(TAG, "Call event post errored (${e.javaClass.simpleName}); retrying while the budget lasts")
                 null
@@ -113,57 +126,65 @@ class CallEventWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             status = if (renewed != null) {
                 postOnce(renewed.accessToken) ?: return retryOrGiveUp(eventId)
             } else {
+                if (WacrmSession.read(applicationContext) is WacrmSession.SessionRead.Unavailable) {
+                    return Result.retry()
+                }
                 notifyReconnect()
                 return terminal(eventId, "the WhatsApp Max session expired")
             }
         }
 
-        return when {
-            status.statusCode == 200 || status.statusCode == 201 || status.statusCode == 409 -> {
+        return when (classifyPostStatus(status.statusCode)) {
+            PostDisposition.SUCCESS -> {
                 AppLogger.i(TAG, "Call event posted (${row.direction}/${row.outcome})")
                 dao.setState(eventId, WacrmUploadState.UPLOADED)
                 Result.success()
             }
-            status.statusCode == 401 -> {
+            PostDisposition.AUTH -> {
                 notifyReconnect()
                 terminal(eventId, "the server rejected the session (HTTP 401)")
             }
-            status.statusCode in 400..499 -> {
+            PostDisposition.TERMINAL -> {
                 AppLogger.w(TAG, "Call event rejected (HTTP ${status.statusCode}): ${status.bodyExcerpt}")
                 terminal(eventId, "the server rejected the event (HTTP ${status.statusCode})")
             }
-            else -> {
+            PostDisposition.RETRY -> {
                 AppLogger.w(TAG, "Call event post failed (HTTP ${status.statusCode}): ${status.bodyExcerpt}; retrying while the budget lasts")
                 retryOrGiveUp(eventId)
             }
         }
     }
 
+    /**
+     * Rotates the stored session via the shared single-flight refresh.
+     * Returns the renewed session, or null when refresh is impossible
+     * (no session, no config, rejected refresh token, unreadable store).
+     * Callers distinguish transient store failure ([WacrmSession.read]
+     * → Unavailable → retry) from terminal auth failure themselves.
+     */
     private fun refreshSession(baseUrl: String): WacrmSession.Session? {
-        val current = WacrmSession.get(applicationContext) ?: return null
         val config = WacrmAuth.fetchMobileConfig(baseUrl) ?: return null
-        return when (val outcome = WacrmAuth.refresh(config, current.refreshToken)) {
-            is WacrmAuth.AuthOutcome.Ok -> {
-                WacrmSession.save(
-                    applicationContext,
-                    outcome.session.accessToken,
-                    outcome.session.refreshToken,
-                    outcome.session.expiresAtMs,
-                    current.userId,
-                    current.userEmail,
-                    current.userName,
-                    current.accountId,
-                    current.accountName,
-                    current.role,
-                )
+        return when (
+            val outcome = WacrmSessionRefresh.refreshIfNeeded(applicationContext, config, force = true)
+        ) {
+            is WacrmSessionRefresh.SessionResult.Valid -> {
                 WhatsappSourceSync.syncAfterAuth(
                     applicationContext,
                     baseUrl,
-                    outcome.session.accessToken
+                    outcome.session.accessToken,
+                    deviceId = DialDeviceId.get(applicationContext)
                 )
-                WacrmSession.get(applicationContext)
+                outcome.session
             }
-            else -> null
+            else -> {
+                // Refresh failed: the session may have been revoked
+                // server-side. Uses the CURRENT access token only;
+                // wipes solely on an explicit revoked answer.
+                WacrmSession.get(applicationContext)?.accessToken?.let { token ->
+                    WacrmDeviceAuth.checkStatusAndWipeIfRevoked(applicationContext, baseUrl, token)
+                }
+                null
+            }
         }
     }
 
@@ -191,6 +212,22 @@ class CallEventWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
         const val KEY_EVENT_ID = "clientEventId"
 
         /**
+         * Buckets an event POST status for the final `when` in
+         * [doWork]: 200/201/409 → success (200 is the idempotent-retry
+         * answer, 409 proves receipt under our idempotency key); 401 →
+         * terminal auth (after the one refresh + repost above); any
+         * other 4xx → terminal; 5xx (including 503 registry outage)
+         * and anything unexpected → transient retry, never terminal
+         * FAILED due to auth and never a wipe. Pure — unit tested.
+         */
+        fun classifyPostStatus(statusCode: Int): PostDisposition = when {
+            statusCode == 200 || statusCode == 201 || statusCode == 409 -> PostDisposition.SUCCESS
+            statusCode == 401 -> PostDisposition.AUTH
+            statusCode in 400..499 -> PostDisposition.TERMINAL
+            else -> PostDisposition.RETRY
+        }
+
+        /**
          * The JSON fields for one event post. Pure — unit tested.
          * Absent values are omitted, never invented: a missed call
          * without a readable number posts exactly like one with.
@@ -202,7 +239,7 @@ class CallEventWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             phoneNumber: String?,
             durationSeconds: Long?,
             occurredAtMillis: Long,
-        ): Map<String, String> = buildMap {
+        ): Map<String, Any> = buildMap {
             put("client_event_id", clientEventId)
             // Phone only: outcome telemetry has no other reliable source
             // (see CallOutcomeMapper — WhatsApp events are never synthesized).
@@ -212,8 +249,10 @@ class CallEventWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(
             }
             put("outcome", outcome)
             if (!phoneNumber.isNullOrBlank()) put("phone_number", phoneNumber.trim())
+            // Duration is a JSON number, not a string: the server
+            // rejects quoted numbers. Everything else stays a string.
             if (durationSeconds != null && durationSeconds >= 0L) {
-                put("duration_seconds", durationSeconds.toString())
+                put("duration_seconds", durationSeconds)
             }
             put("occurred_at", CallEvents.occurredAtIso(occurredAtMillis))
         }

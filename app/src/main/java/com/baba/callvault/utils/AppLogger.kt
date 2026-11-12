@@ -339,7 +339,7 @@ object AppLogger {
         // person who most needed to send something was the one person who could not.
 
         val shareDir = File(context.cacheDir, "logs").apply { mkdirs() }
-        val report = File(shareDir, "callvault_debug_report.txt")
+        val report = File(shareDir, "call-recorder-debug-report.txt")
         return try {
             // Write the header and the log body into ONE output stream. The PrintWriter is flushed
             // (not closed) before copying the body so its text lands ahead of the log bytes; the

@@ -42,7 +42,7 @@ object SystemLogCollector {
     private const val TAG = "CV:SystemLog"
 
     /** Filename of the collected slice, alongside the app's own report in the same folder. */
-    private const val REPORT_NAME = "callvault_system_report.txt"
+    private const val REPORT_NAME = "call-recorder-system-report.txt"
 
     /** Line and byte ceilings, so the attachment stays something a mail client will send. */
     private const val MAX_LINES = 4_000
