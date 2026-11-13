@@ -152,6 +152,9 @@ fun WizardScreen(
     val syncHour = remember(updateTrigger) { viewModel.preferences.getSyncTimeHour() }
     val syncMinute = remember(updateTrigger) { viewModel.preferences.getSyncTimeMinute() }
     val syncDayOfWeek = remember(updateTrigger) { viewModel.preferences.getSyncDayOfWeek() }
+    val carrierRecording = remember(updateTrigger) { viewModel.preferences.isCarrierRecordingEnabled() }
+    val autoRecordIncoming = remember(updateTrigger) { viewModel.preferences.isAutoRecordIncomingEnabled() }
+    val autoRecordOutgoing = remember(updateTrigger) { viewModel.preferences.isAutoRecordOutgoingEnabled() }
     val audioCodec = remember(updateTrigger) { viewModel.preferences.getAudioCodec() }
     val audioBitRate = remember(updateTrigger) { viewModel.preferences.getAudioBitRate() }
     val fileNameTemplate = remember(updateTrigger) { viewModel.preferences.getFileNameTemplate() }
@@ -240,6 +243,14 @@ fun WizardScreen(
                         onSelectMinute = viewModel::setSyncTimeMinute,
                         onSelectDayOfWeek = viewModel::setSyncDayOfWeek
                     )
+                    WizardStep.AUTO_RECORD -> AutoRecordStep(
+                        carrier = carrierRecording,
+                        incoming = autoRecordIncoming,
+                        outgoing = autoRecordOutgoing,
+                        onCarrierChange = viewModel::setCarrierRecording,
+                        onIncomingChange = viewModel::setAutoRecordIncoming,
+                        onOutgoingChange = viewModel::setAutoRecordOutgoing
+                    )
                     WizardStep.RELIABILITY -> ReliabilityStep()
                     WizardStep.EXPERIMENTAL -> ExperimentalStep()
                     WizardStep.AUDIO -> AudioStep(
@@ -259,7 +270,7 @@ fun WizardScreen(
 }
 
 /** The logical steps of the wizard (two of them are conditionally included — see [wizardSteps]). */
-internal enum class WizardStep { STORAGE, SCHEDULE, RELIABILITY, EXPERIMENTAL, AUDIO, FILE_NAME }
+internal enum class WizardStep { STORAGE, SCHEDULE, AUTO_RECORD, RELIABILITY, EXPERIMENTAL, AUDIO, FILE_NAME }
 
 /**
  * The visible step list, in order. Kept a pure function so the two exclusions are testable and stay
@@ -278,6 +289,7 @@ internal enum class WizardStep { STORAGE, SCHEDULE, RELIABILITY, EXPERIMENTAL, A
 internal fun wizardSteps(usesDrive: Boolean, usesEmbeddedAdb: Boolean): List<WizardStep> = buildList {
     add(WizardStep.STORAGE)
     if (usesDrive) add(WizardStep.SCHEDULE)
+    add(WizardStep.AUTO_RECORD)
     if (usesEmbeddedAdb) add(WizardStep.RELIABILITY)
     add(WizardStep.EXPERIMENTAL)
     add(WizardStep.AUDIO)
@@ -714,6 +726,63 @@ private fun ScheduleStep(
 }
 
 /**
+ * What gets recorded, in one place: phone calls (with the incoming/outgoing split), then
+ * app calls via the shared VoIP switch.
+ */
+@Composable
+private fun AutoRecordStep(
+    carrier: Boolean,
+    incoming: Boolean,
+    outgoing: Boolean,
+    onCarrierChange: (Boolean) -> Unit,
+    onIncomingChange: (Boolean) -> Unit,
+    onOutgoingChange: (Boolean) -> Unit
+) {
+    val context = LocalContext.current
+    // The VoIP switch owns its own persistence (and its consent dialog), so this mirrors it only to
+    // answer the one question this step now has to answer: will anything be recorded at all?
+    var voip by remember { mutableStateOf(AppPreferences(context).isVoipRecordingEnabled()) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Offered here and not only in Settings because the wizard cannot be re-run, and someone
+        // installing CallVault for app calls alone wants this on day one — otherwise their first
+        // week is a Record prompt on every phone call they take.
+        ToggleCard(
+            title = stringResource(R.string.settings_carrier_recording),
+            description = stringResource(R.string.settings_carrier_recording_description),
+            checked = carrier,
+            onCheckedChange = onCarrierChange
+        )
+        if (carrier) {
+            ToggleCard(
+                title = stringResource(R.string.settings_auto_record_incoming),
+                description = stringResource(R.string.wizard_ui_auto_incoming_desc),
+                checked = incoming,
+                onCheckedChange = onIncomingChange
+            )
+            ToggleCard(
+                title = stringResource(R.string.settings_auto_record_outgoing),
+                description = stringResource(R.string.wizard_ui_auto_outgoing_desc),
+                checked = outgoing,
+                onCheckedChange = onOutgoingChange
+            )
+        }
+
+        // App calls belong beside phone calls: they are the same decision — what gets recorded — and
+        // splitting them across two steps is exactly how someone reached Finish with both off. The very
+        // switch Settings renders, so the consent confirmation and the Shizuku greying come with it.
+        CvCard { VoipRecordingToggle(onEnabledChange = { voip = it }) }
+
+        // Said, not enforced. Finish stays enabled because in Shizuku mode the app-call switch cannot be
+        // turned on at all, so gating here would strand that user on a step they cannot satisfy. With
+        // both off nothing is ever recorded — a legitimate choice to make, but not one to make silently.
+        if (!carrier && !voip) {
+            WarningCard(stringResource(R.string.wizard_auto_record_nothing_warning))
+        }
+    }
+}
+
+/**
  * The experimental opt-ins, mirroring Settings ▸ General ▸ Experimental so the two group them alike.
  *
  * The toggle is the very same composable Settings renders — shared rather than reimplemented, so a
@@ -894,6 +963,7 @@ private fun FileNameStep(
 private fun stepTitleRes(step: WizardStep): Int = when (step) {
     WizardStep.STORAGE -> R.string.wizard_storage_title
     WizardStep.SCHEDULE -> R.string.wizard_schedule_title
+    WizardStep.AUTO_RECORD -> R.string.wizard_auto_record_title
     WizardStep.RELIABILITY -> R.string.wizard_reliability_title
     WizardStep.EXPERIMENTAL -> R.string.wizard_experimental_title
     WizardStep.AUDIO -> R.string.wizard_audio_title
@@ -903,6 +973,7 @@ private fun stepTitleRes(step: WizardStep): Int = when (step) {
 private fun stepSubtitleRes(step: WizardStep): Int = when (step) {
     WizardStep.STORAGE -> R.string.wizard_storage_subtitle
     WizardStep.SCHEDULE -> R.string.wizard_schedule_subtitle
+    WizardStep.AUTO_RECORD -> R.string.wizard_auto_record_subtitle
     WizardStep.RELIABILITY -> R.string.wizard_reliability_subtitle
     WizardStep.EXPERIMENTAL -> R.string.wizard_experimental_subtitle
     WizardStep.AUDIO -> R.string.wizard_audio_subtitle

@@ -19,13 +19,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The setup wizard after the onboarding cleanup: the Automatic recording,
- * Turning calls into text, and Staying up to date pages are gone, leaving
- * five functional steps (plus the pre-existing conditional schedule /
- * reliability inclusions). Navigation is plain index arithmetic over this
- * list, so removing entries from the list IS removing the pages — Back and
- * Next cannot land on a step that is not listed, and "Step N of M" follows
- * automatically.
+ * The setup wizard step list: the Automatic recording page sits between storage
+ * setup and the reliability opt-ins, so the VoIP/app-call switch is offered during
+ * first-run setup (it cannot be reached anywhere else). Navigation is plain index
+ * arithmetic over this list, so adding the entry back to the list IS bringing the
+ * page back — Back and Next cannot land on a step that is not listed, and
+ * "Step N of M" follows automatically.
  *
  * Also pins that the wizard completion flag is independent of the step
  * list: existing installs that already finished setup are never forced
@@ -36,10 +35,11 @@ class WizardStepsTest {
     private fun standardSteps() = wizardSteps(usesDrive = false, usesEmbeddedAdb = true)
 
     @Test
-    fun `standard flow has exactly five steps in order`() {
+    fun `standard flow has exactly six steps in order`() {
         assertEquals(
             listOf(
                 WizardStep.STORAGE,
+                WizardStep.AUTO_RECORD,
                 WizardStep.RELIABILITY,
                 WizardStep.EXPERIMENTAL,
                 WizardStep.AUDIO,
@@ -50,12 +50,12 @@ class WizardStepsTest {
     }
 
     @Test
-    fun `automatic recording page is removed`() {
+    fun `automatic recording page is present in every configuration`() {
         for (usesDrive in listOf(false, true)) {
             for (usesEmbeddedAdb in listOf(false, true)) {
                 assertTrue(
                     "usesDrive=$usesDrive usesEmbeddedAdb=$usesEmbeddedAdb",
-                    wizardSteps(usesDrive, usesEmbeddedAdb).none { it.name == "AUTO_RECORD" },
+                    wizardSteps(usesDrive, usesEmbeddedAdb).any { it.name == "AUTO_RECORD" },
                 )
             }
         }
@@ -91,6 +91,7 @@ class WizardStepsTest {
             listOf(
                 WizardStep.STORAGE,
                 WizardStep.SCHEDULE,
+                WizardStep.AUTO_RECORD,
                 WizardStep.RELIABILITY,
                 WizardStep.EXPERIMENTAL,
                 WizardStep.AUDIO,
@@ -105,6 +106,7 @@ class WizardStepsTest {
         assertEquals(
             listOf(
                 WizardStep.STORAGE,
+                WizardStep.AUTO_RECORD,
                 WizardStep.EXPERIMENTAL,
                 WizardStep.AUDIO,
                 WizardStep.FILE_NAME,
