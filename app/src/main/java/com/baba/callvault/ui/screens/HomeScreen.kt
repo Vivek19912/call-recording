@@ -31,6 +31,7 @@ import com.baba.callvault.data.merge.MergeCandidates
 import com.baba.callvault.data.recordings.AudioImport
 import com.baba.callvault.data.recordings.DeleteScope
 import com.baba.callvault.data.recordings.RecordingSelection
+import com.baba.callvault.data.recordings.isDeleteEligible
 import com.baba.callvault.ui.common.DeleteScopeStateSaver
 import com.baba.callvault.ui.common.M3DropdownField
 import com.baba.callvault.ui.common.OptionItem
@@ -40,7 +41,6 @@ import com.baba.callvault.ui.common.UriSetStateSaver
 import com.baba.callvault.ui.common.formatByteSize
 import com.baba.callvault.ui.common.SupportDialog
 import com.baba.callvault.system.shareRecordings
-import com.baba.callvault.system.shareRecording
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -77,8 +77,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.CallMerge
-import androidx.compose.material.icons.filled.CallSplit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Smartphone
@@ -131,7 +129,6 @@ import com.baba.callvault.data.transcripts.TranscriptRepository
 import com.baba.callvault.data.transcripts.TranscriptsPage
 import com.baba.callvault.data.waveform.RecordingExtrasRepository
 import com.baba.callvault.data.transcripts.TranscriptStatus
-import com.baba.callvault.ui.common.TranscriptActionButton
 import com.baba.callvault.transcription.model.ModelRepository
 import com.baba.callvault.transcription.model.TranscriptionModel
 import com.baba.callvault.transcription.AudioDecoder
@@ -2648,11 +2645,13 @@ private fun EmptyRecordings() {
  *  - [DriveCopy]  — only the Drive copy of a BOTH recording.
  */
 /**
- * The per-row overflow menu: Share, then Delete.
+ * The per-row overflow menu: Delete only, and only once the recording is old enough.
  *
- * Delete costs one more tap than it did as a bare icon. That is the right trade for the only
- * destructive action in the list — and it leaves somewhere to put the next row action without
- * squeezing the name further.
+ * Share and "Merge with another call" are intentionally not offered here — their
+ * implementations, handlers, and supporting code are untouched, only their menu entries are
+ * gone. Delete itself appears only when [canDelete] holds ([isDeleteEligible] on the row's
+ * recording date), and the overflow button is hidden entirely while it does not, so young
+ * recordings show no menu at all.
  */
 @Composable
 private fun RecordingRowMenu(
@@ -2662,9 +2661,11 @@ private fun RecordingRowMenu(
     /** Null on a row nothing can be merged into it — an import, which was never a call. */
     onMerge: (() -> Unit)? = null,
     onUnMerge: (() -> Unit)? = null,
+    /** True once the row's recording date passes [isDeleteEligible]; hides menu and button. */
+    canDelete: Boolean = true,
 ) {
-    val context = LocalContext.current
     var open by remember { mutableStateOf(false) }
+    if (!canDelete) return
 
     Box {
         IconButton(onClick = { open = true }, modifier = Modifier.size(ROW_ACTION_SIZE)) {
@@ -2676,34 +2677,6 @@ private fun RecordingRowMenu(
             )
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.home_share)) },
-                leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
-                onClick = {
-                    open = false
-                    context.shareRecording(shareUri, shareName)
-                }
-            )
-            if (onMerge != null) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.merge_menu_action)) },
-                    leadingIcon = { Icon(Icons.Filled.CallMerge, contentDescription = null) },
-                    onClick = {
-                        open = false
-                        onMerge()
-                    }
-                )
-            }
-            if (onUnMerge != null) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.merge_menu_take_apart)) },
-                    leadingIcon = { Icon(Icons.Filled.CallSplit, contentDescription = null) },
-                    onClick = {
-                        open = false
-                        onUnMerge()
-                    }
-                )
-            }
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.home_delete)) },
                 leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null) },
@@ -3044,7 +3017,8 @@ private fun RecordingRow(
             // control for an action the whole card performs — and it was spending 48dp of the width
             // the contact name needed. The copies still appear on tap; the source badge below says
             // there are two.
-            // Main-row overflow: Share, then Delete. A single icon rather than one per action —
+            // Main-row overflow: Delete only, once the recording is old enough
+            // ([isDeleteEligible]). A single icon rather than one per action —
             // the row is width-bound (the meta line had to move below it for the same reason), and a
             // BOTH row already spends a slot on its chevron.
             //
@@ -3065,16 +3039,12 @@ private fun RecordingRow(
                     CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                 }
             } else {
-                // One slot, four meanings: transcribe, in progress, read, retry. Placed before the
-                // overflow menu so the common action is the easier reach.
-                TranscriptActionButton(
-                    status = transcriptStatus,
-                    onTranscribe = onTranscribe,
-                    onOpen = onOpenTranscript,
-                    onRetry = onRetryTranscript,
-                    modifier = Modifier.size(ROW_ACTION_SIZE),
-                    percent = transcriptPercent
-                )
+                // No transcription button on the card: the TranscriptActionButton
+                // (transcribe / in progress / read / retry) is intentionally not
+                // composed here. Transcription itself is untouched — the handlers
+                // (onTranscribe / onOpenTranscript / onRetryTranscript), statuses,
+                // workers, and storage all remain wired; only this visible slot
+                // beside the overflow menu is gone.
                 RecordingRowMenu(
                     // Share the device copy when there is one: it needs no network to read, and for a
                     // BOTH row the two copies are the same audio.
@@ -3086,7 +3056,10 @@ private fun RecordingRow(
                     // Merging joins a dropped call to the redial and deletes the parts. An import is
                     // neither half of that, so it is not offered the action at all.
                     onMerge = onMerge.takeIf { MergeCandidates.canMerge(item) },
-                    onUnMerge = onUnMerge
+                    onUnMerge = onUnMerge,
+                    // Delete unlocks 10 calendar days after the recording date; younger
+                    // recordings show no overflow button at all.
+                    canDelete = isDeleteEligible(item.startedAtMillis)
                 )
             }
         }
